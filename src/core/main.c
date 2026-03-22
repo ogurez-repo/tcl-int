@@ -1,5 +1,6 @@
-int yyparse(void);
+#include "parser.h"
 
-int main(void) {
+int main(void)
+{
     return yyparse();
 }

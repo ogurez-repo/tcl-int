@@ -1,5 +1,6 @@
 %{
 #include "parser.h"
+#include "runtime/variables.h"
 %}
 
 %union {
@@ -20,23 +21,27 @@ program:
 
 command:
     SET STRING STRING {
-        new_var($2, $3);
+        variables_set($2, $3);
     }
     | PUT STRING {
         printf("%s\n", $2);
     }
     | PUT VAR {
-        char *value = get_var_value($2);
-        if (value) {
-            printf("%s\n", value);
-        } else {
+        char *variable_value = variables_get($2);
+        if (variable_value)
+        {
+            printf("%s\n", variable_value);
+        }
+        else
+        {
             fprintf(stderr, "variable '$%s' not found\n", $2);
             YYERROR;
         }
-}
+    }
     ;
 %%
 
-void yyerror(const char *s) {
-    fprintf(stderr, "parse error: %s\n", s);
+void yyerror(const char *message)
+{
+    fprintf(stderr, "parse error: %s\n", message);
 }

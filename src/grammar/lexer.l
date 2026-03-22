@@ -11,12 +11,12 @@
 "put"               { return PUT; }
 
 \$[^ \t\r\n]+        {
-    yylval.str = m_strdup(yytext + 1);
+    yylval.str = duplicate_token_text(yytext + 1);
     return VAR;
 }
 
 [^ \t\r\n]+         {
-    yylval.str = m_strdup(yytext);
+    yylval.str = duplicate_token_text(yytext);
     return STRING;
 }
 
