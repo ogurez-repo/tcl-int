@@ -14,8 +14,14 @@ PARSER_C = $(GEN_DIR)/parser.tab.c
 PARSER_H = $(GEN_DIR)/parser.tab.h
 LEXER_C = $(GEN_DIR)/lexer.yy.c
 
-TARGET = $(BIN_DIR)/calc
-SOURCES = $(CORE_DIR)/main.c $(CORE_DIR)/calc_runtime.c $(PARSER_C) $(LEXER_C)
+TARGET = $(BIN_DIR)/tclsh
+
+rwildcard = $(foreach d,$(wildcard $(1)/*),$(call rwildcard,$(d),$(2))) \
+	$(filter $(subst *,%,$(2)),$(wildcard $(1)/$(2)))
+
+SRC_SOURCES = $(call rwildcard,$(SRC_DIR),*.c)
+GEN_SOURCES = $(PARSER_C) $(LEXER_C)
+SOURCES = $(SRC_SOURCES) $(GEN_SOURCES)
 
 .PHONY: all clean run
 

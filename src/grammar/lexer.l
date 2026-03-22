@@ -1,14 +1,26 @@
 %option noyywrap
 
 %{
-#include <stdlib.h>
-#include "parser.tab.h"
+#include "lexer.h"
 %}
 
 %%
-[0-9]+      { yylval.ival = atoi(yytext); return NUMBER; }
-[ \t\r]+    { /* ignore whitespace */ }
-\n          { return '\n'; }
-"+"         { return '+'; }
-.           { return yytext[0]; }
+
+[ \t]+              ;
+"set"               { return SET; }
+"put"               { return PUT; }
+
+\$[^ \t\r\n]+        {
+    yylval.str = m_strdup(yytext + 1);
+    return VAR;
+}
+
+[^ \t\r\n]+         {
+    yylval.str = m_strdup(yytext);
+    return STRING;
+}
+
+[\r\n]+            ;
+
+
 %%
