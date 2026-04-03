@@ -34,7 +34,7 @@ void variables_set(char *name, char *value)
     s_variable_list_tail = append_list(s_variable_list_tail, variable);
 }
 
-char *variables_get(const char *name)
+char *variables_get(char *name)
 {
     List *current_node = s_variable_list_head;
     while (current_node)

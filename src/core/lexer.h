@@ -6,15 +6,8 @@
 
 #include "parser.tab.h"
 
-static char *duplicate_token_text(const char *source)
-{
-    char *copy = (char *)malloc(strlen(source) + 1);
-    if (copy)
-    {
-        strcpy(copy, source);
-    }
-
-    return copy;
-}
-
+char *duplicate_token_text(char *source);
+char *interpolate_token_text(char *source);
+char *interpolate_input_text(char *source);
+void lexer_reset_state(void);
 #endif

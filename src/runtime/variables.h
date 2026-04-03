@@ -11,6 +11,6 @@ typedef struct Variable
 } Variable;
 
 void variables_set(char *name, char *value);
-char *variables_get(const char *name);
+char *variables_get(char *name);
 
 #endif
