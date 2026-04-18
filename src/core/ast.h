@@ -11,6 +11,7 @@ typedef struct SourceSpan
 typedef enum AstWordType
 {
     AST_WORD_STRING,
+    AST_WORD_BRACED,
     AST_WORD_VAR
 } AstWordType;
 

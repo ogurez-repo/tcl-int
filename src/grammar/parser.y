@@ -19,6 +19,7 @@ static TclError *s_error = NULL;
 }
 
 %token <str> STRING
+%token <str> BRACED
 %token <str> VAR
 %token CMDSEP
 %token INVALID
@@ -84,6 +85,21 @@ word:
         span.end_column = @1.last_column;
 
         $$ = ast_word_create(AST_WORD_STRING, $1, &span);
+        if (!$$)
+        {
+            free($1);
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
+            YYERROR;
+        }
+    }
+    | BRACED {
+        SourceSpan span;
+
+        span.line = @1.first_line;
+        span.column = @1.first_column;
+        span.end_column = @1.last_column;
+
+        $$ = ast_word_create(AST_WORD_BRACED, $1, &span);
         if (!$$)
         {
             free($1);

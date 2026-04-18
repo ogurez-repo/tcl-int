@@ -9,6 +9,16 @@ This repository currently supports a focused command subset:
 - `set <name> <value>`
 - `put <text>`
 - `put $<name>`
+- `put {<literal text>}` (including nested braces)
+
+The parser also validates structural syntax for:
+
+- `if ... elseif ... else ...`
+- `while <test> <body>`
+- `for <start> <test> <next> <body>`
+- `proc <name> <args> <body>`
+
+These control/procedure forms are currently syntax-validated only (their bodies are not executed in this stage).
 
 The implementation also supports word substitution for the current subset, including quoted strings and embedded variable references like `x$a` and `${a}`.
 
@@ -21,7 +31,7 @@ Current command syntax behavior:
 ## Architecture
 
 - Lexer: tokenization and source location tracking.
-- Parser: builds an AST for one input command line.
+- Parser: builds an AST for the full input script.
 - Executor: evaluates AST words and dispatches supported commands.
 - Runtime store: variable storage with explicit lifecycle APIs.
 - Error model: typed diagnostics (`lexical`, `syntax`, `semantic`, `system`) with line/column.
