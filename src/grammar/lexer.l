@@ -1,104 +1,171 @@
-%option noyywrap
-%x ARG
+%option noyywrap nodefault noinput nounput
+%x CMDSTART
 
 %{
 #include "lexer.h"
 
-static int command_token_from_text(const char *text)
+static TclError *s_error = NULL;
+static int s_line = 1;
+static int s_column = 1;
+
+static void advance_line(const char *text, int length)
 {
-    if (strcmp(text, "set") == 0)
+    int index = 0;
+    int line_breaks = 0;
+
+    while (index < length)
     {
-        return SET;
+        if (text[index] == '\r')
+        {
+            line_breaks++;
+            if (index + 1 < length && text[index + 1] == '\n')
+            {
+                index++;
+            }
+        }
+        else if (text[index] == '\n')
+        {
+            line_breaks++;
+        }
+
+        index++;
     }
 
-    if (strcmp(text, "put") == 0)
+    if (line_breaks == 0)
     {
-        return PUT;
+        line_breaks = 1;
     }
 
-    return 0;
+    s_line += line_breaks;
+    s_column = 1;
 }
+
+#define YY_USER_ACTION \
+    yylloc.first_line = s_line; \
+    yylloc.last_line = s_line; \
+    yylloc.first_column = s_column; \
+    yylloc.last_column = s_column + (int)yyleng - 1; \
+    s_column += (int)yyleng;
 %}
 
 %%
 
-<INITIAL,ARG>[ \t]+      ;
+<CMDSTART>[ \t]+      ;
+<INITIAL>[ \t]+       ;
 
-<INITIAL>"set"          {
-    BEGIN(ARG);
-    return SET;
+<CMDSTART>#[^\r\n]*  ;
+
+<CMDSTART>;+ {
+    return CMDSEP;
 }
 
-<INITIAL>"put"          {
-    BEGIN(ARG);
-    return PUT;
+<INITIAL>;+ {
+    BEGIN(CMDSTART);
+    return CMDSEP;
 }
 
-<INITIAL>\"[^ \t\r\n]*\" {
-    int command_token;
-    char *string = interpolate_token_text(yytext);
+<CMDSTART>[\r\n]+ {
+    advance_line(yytext, (int)yyleng);
+    return CMDSEP;
+}
 
-    if (string == NULL)
+<INITIAL>[\r\n]+ {
+    BEGIN(CMDSTART);
+    advance_line(yytext, (int)yyleng);
+    return CMDSEP;
+}
+
+<CMDSTART,INITIAL>\"([^\"\\\n]|\\.)*\" {
+    yylval.str = duplicate_quoted_text(yytext, (size_t)yyleng);
+    if (!yylval.str)
     {
-        fprintf(stderr, "Error: Failed to interpolate string: %s\n", yytext);
-        exit(1);
+        if (s_error)
+        {
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, yylloc.first_line, yylloc.first_column, "out of memory");
+        }
+        return INVALID;
     }
 
-    command_token = command_token_from_text(string);
-    if (command_token != 0)
-    {
-        free(string);
-        BEGIN(ARG);
-        return command_token;
-    }
-
-    yylval.str = string;
-    BEGIN(ARG);
-    return STRING;
-}
-
-<ARG>\"[^ \t\r\n]*\" {
-    char *string = interpolate_token_text(yytext);
-
-    if (string == NULL)
-    {
-        fprintf(stderr, "Error: Failed to interpolate string: %s\n", yytext);
-        exit(1);
-    }
-
-    yylval.str = string;
-    return STRING;
-}
-
-<INITIAL>\$[^ \t\r\n]+ {
-    yylval.str = duplicate_token_text(yytext + 1);
-    BEGIN(ARG);
-    return VAR;
-}
-
-<ARG>\$[^ \t\r\n]+ {
-    yylval.str = duplicate_token_text(yytext + 1);
-    return VAR;
-}
-
-<INITIAL>[^ \t\r\n]+    {
-    yylval.str = duplicate_token_text(yytext);
-    BEGIN(ARG);
-    return STRING;
-}
-
-<ARG>[^ \t\r\n]+        {
-    yylval.str = duplicate_token_text(yytext);
-    return STRING;
-}
-
-<INITIAL,ARG>[\r\n]+     {
     BEGIN(INITIAL);
+    return STRING;
+}
+
+<CMDSTART,INITIAL>\"([^\"\\\n]|\\.)* {
+    if (s_error)
+    {
+        tcl_error_set(
+            s_error,
+            TCL_ERROR_LEXICAL,
+            yylloc.first_line,
+            yylloc.first_column,
+            "unterminated quoted string");
+    }
+
+    return INVALID;
+}
+
+<CMDSTART,INITIAL>\$\{[^}\r\n]+\} {
+    yylval.str = duplicate_substring(yytext + 2, (size_t)yyleng - 3);
+    if (!yylval.str)
+    {
+        if (s_error)
+        {
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, yylloc.first_line, yylloc.first_column, "out of memory");
+        }
+        return INVALID;
+    }
+
+    BEGIN(INITIAL);
+    return VAR;
+}
+
+<CMDSTART,INITIAL>\$[A-Za-z_][A-Za-z0-9_:]* {
+    yylval.str = duplicate_token_text(yytext + 1);
+    if (!yylval.str)
+    {
+        if (s_error)
+        {
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, yylloc.first_line, yylloc.first_column, "out of memory");
+        }
+        return INVALID;
+    }
+
+    BEGIN(INITIAL);
+    return VAR;
+}
+
+<CMDSTART,INITIAL>[^ \t\r\n\";]+ {
+    yylval.str = duplicate_token_text(yytext);
+    if (!yylval.str)
+    {
+        if (s_error)
+        {
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, yylloc.first_line, yylloc.first_column, "out of memory");
+        }
+        return INVALID;
+    }
+
+    BEGIN(INITIAL);
+    return STRING;
 }
 
 %%
 
+void lexer_set_error(TclError *error)
+{
+    s_error = error;
+}
+
+void lexer_set_line(int line)
+{
+    if (line > 0)
+    {
+        s_line = line;
+    }
+}
+
 void lexer_reset_state(void)
 {
-    BEGIN(INITIAL);
+    BEGIN(CMDSTART);
+    s_column = 1;
 }

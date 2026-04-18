@@ -11,6 +11,5 @@ typedef struct List
 
 List *new_list(void *data);
 List *append_list(List *list, void *data);
-List *split_list_mid(List *head);
 void free_list(List *head, void (*free_data)(void *));
 #endif

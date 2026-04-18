@@ -1,22 +1,30 @@
 import subprocess
 
+
 class Tcl:
     def __init__(self, tcl_path: str) -> None:
         self.tcl_path = tcl_path
-        self._cmd = ""
+        self._script_lines: list[str] = []
 
-    def run(self) -> str:
-        result = subprocess.run(
+    def command(self, text: str) -> None:
+        self._script_lines.append(text)
+
+    def run(self) -> subprocess.CompletedProcess[str]:
+        script = "\n".join(self._script_lines)
+        if script:
+            script += "\n"
+
+        return subprocess.run(
             [self.tcl_path],
-            input=self._cmd,
+            input=script,
             text=True,
             capture_output=True,
+            check=False,
+            timeout=5,
         )
 
-        return result.stdout.strip()
-
     def set(self, var: str, value: str) -> None:
-        self._cmd += f"set {var} {value}\n"
+        self.command(f"set {var} {value}")
 
-    def put(self, var: str) -> None:
-        self._cmd += f"put {var}\n"
+    def put(self, text: str) -> None:
+        self.command(f"put {text}")

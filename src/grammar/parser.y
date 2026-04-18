@@ -1,47 +1,163 @@
 %{
+#include <stdlib.h>
+
 #include "parser.h"
-#include "runtime/variables.h"
+#include "core/ast.h"
+#include "core/errors.h"
+#include "lexer.h"
+
+static AstCommand *s_program_head = NULL;
+static AstCommand *s_program_tail = NULL;
+static TclError *s_error = NULL;
 %}
+
+%locations
 
 %union {
     char *str;
+    AstWord *word;
 }
 
 %token <str> STRING
 %token <str> VAR
-%token <str> SET
-%token <str> PUT
+%token CMDSEP
+%token INVALID
+
+%type <word> word words
 
 %%
 
 program:
-           /* empty */
-    | program command
+            /* empty */
+        | separators
+        | command_list separators_opt
+    ;
+
+command_list:
+      command
+    | command_list separators command
+    ;
+
+separators_opt:
+      /* empty */
+    | separators
+    ;
+
+separators:
+      CMDSEP
+    | separators CMDSEP
     ;
 
 command:
-    SET STRING STRING {
-        variables_set($2, $3);
-    }
-    | PUT STRING {
-        printf("%s\n", $2);
-    }
-    | PUT VAR {
-        char *variable_value = variables_get($2);
-        if (variable_value)
+    words {
+        SourceSpan span;
+        AstCommand *command;
+
+        span = $1->span;
+        command = ast_command_create($1, &span);
+        if (!command)
         {
-            printf("%s\n", variable_value);
-        }
-        else
-        {
-            fprintf(stderr, "variable '$%s' not found\n", $2);
+            ast_word_free($1);
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
             YYERROR;
         }
+        ast_command_append(&s_program_head, &s_program_tail, command);
+    }
+    ;
+
+words:
+    word {
+        $$ = $1;
+    }
+    | words word {
+        ast_word_append($1, $2);
+        $$ = $1;
+    }
+    ;
+
+word:
+    STRING {
+        SourceSpan span;
+
+        span.line = @1.first_line;
+        span.column = @1.first_column;
+        span.end_column = @1.last_column;
+
+        $$ = ast_word_create(AST_WORD_STRING, $1, &span);
+        if (!$$)
+        {
+            free($1);
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
+            YYERROR;
+        }
+    }
+    | VAR {
+        SourceSpan span;
+
+        span.line = @1.first_line;
+        span.column = @1.first_column;
+        span.end_column = @1.last_column;
+
+        $$ = ast_word_create(AST_WORD_VAR, $1, &span);
+        if (!$$)
+        {
+            free($1);
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
+            YYERROR;
+        }
+    }
+    | INVALID {
+        if (s_error && s_error->type == TCL_ERROR_NONE)
+        {
+            tcl_error_set(s_error, TCL_ERROR_LEXICAL, @1.first_line, @1.first_column, "invalid token");
+        }
+
+        YYERROR;
     }
     ;
 %%
 
 void yyerror(const char *message)
 {
-    fprintf(stderr, "parse error: %s\n", message);
+    extern YYLTYPE yylloc;
+    extern int yychar;
+
+    TclErrorType type = TCL_ERROR_SYNTAX;
+
+    if (yychar == INVALID)
+    {
+        type = TCL_ERROR_LEXICAL;
+    }
+
+    if (s_error && s_error->type == TCL_ERROR_NONE)
+    {
+        tcl_error_set(s_error, type, yylloc.first_line, yylloc.first_column, message);
+    }
+}
+
+void parser_begin(TclError *error)
+{
+    parser_discard_program();
+    s_error = error;
+    lexer_set_error(error);
+}
+
+AstCommand *parser_take_program(void)
+{
+    AstCommand *program = s_program_head;
+    s_program_head = NULL;
+    s_program_tail = NULL;
+    return program;
+}
+
+void parser_discard_program(void)
+{
+    if (!s_program_head)
+    {
+        return;
+    }
+
+    ast_command_free(s_program_head);
+    s_program_head = NULL;
+    s_program_tail = NULL;
 }
