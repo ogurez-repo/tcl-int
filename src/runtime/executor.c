@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "runtime/executor.h"
+#include "runtime/validator.h"
 
 static int append_text(char **buffer, size_t *capacity, size_t *length, const char *text, size_t text_length)
 {
@@ -125,6 +126,41 @@ static int resolve_string_word(
             while (source_index < source_length && is_variable_name_char(word->text[source_index]))
             {
                 source_index++;
+            }
+
+            if (source_index < source_length && word->text[source_index] == '(')
+            {
+                int depth = 1;
+                source_index++;
+                while (source_index < source_length)
+                {
+                    if (word->text[source_index] == '(')
+                    {
+                        depth++;
+                    }
+                    else if (word->text[source_index] == ')')
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            source_index++;
+                            break;
+                        }
+                    }
+                    source_index++;
+                }
+
+                if (depth != 0)
+                {
+                    free(buffer);
+                    tcl_error_set(
+                        error,
+                        TCL_ERROR_SYNTAX,
+                        word->span.line,
+                        word->span.column,
+                        "unterminated array variable reference");
+                    return 0;
+                }
             }
             name_length = source_index - name_start;
         }
@@ -358,75 +394,6 @@ static int word_is_literal_keyword(const AstWord *word, const char *keyword)
     return strcmp(word->text, keyword) == 0;
 }
 
-static int syntax_error_at_word(TclError *error, const AstWord *word, const char *message)
-{
-    tcl_error_set(error, TCL_ERROR_SYNTAX, word->span.line, word->span.column, message);
-    return 0;
-}
-
-static int validate_if_syntax(const AstWord **words, size_t count, TclError *error)
-{
-    size_t index = 1;
-
-    if (count < 3)
-    {
-        tcl_error_set(error, TCL_ERROR_SYNTAX, words[0]->span.line, words[0]->span.column, "if expects condition and body");
-        return 0;
-    }
-
-    for (;;)
-    {
-        if (index >= count)
-        {
-            return syntax_error_at_word(error, words[count - 1], "if missing condition after elseif");
-        }
-
-        index++;
-
-        if (index < count && word_is_literal_keyword(words[index], "then"))
-        {
-            index++;
-        }
-
-        if (index >= count)
-        {
-            return syntax_error_at_word(error, words[count - 1], "if missing body");
-        }
-
-        index++;
-
-        if (index >= count)
-        {
-            return 1;
-        }
-
-        if (word_is_literal_keyword(words[index], "elseif"))
-        {
-            index++;
-            continue;
-        }
-
-        if (word_is_literal_keyword(words[index], "else"))
-        {
-            index++;
-            if (index >= count)
-            {
-                return syntax_error_at_word(error, words[count - 1], "if missing else body");
-            }
-
-            index++;
-            if (index != count)
-            {
-                return syntax_error_at_word(error, words[index], "unexpected token after else body");
-            }
-
-            return 1;
-        }
-
-        return syntax_error_at_word(error, words[index], "unexpected token in if command");
-    }
-}
-
 static int validate_while_syntax(const AstWord **words, size_t count, TclError *error)
 {
     if (count != 3)
@@ -460,7 +427,11 @@ static int validate_proc_syntax(const AstWord **words, size_t count, TclError *e
     return 1;
 }
 
-static int execute_command(ExecutorContext *context, const AstCommand *command, TclError *error)
+static int execute_command(
+    ExecutorContext *context,
+    ValidatorContext *validator,
+    const AstCommand *command,
+    TclError *error)
 {
     const AstWord **words;
     char *command_name = NULL;
@@ -495,21 +466,24 @@ static int execute_command(ExecutorContext *context, const AstCommand *command, 
             goto cleanup;
         }
 
-        if (count != 3)
+        if (count != 2 && count != 3)
         {
             tcl_error_set(
                 error,
                 TCL_ERROR_SYNTAX,
                 command->span.line,
                 command->span.column,
-                "set expects exactly 2 arguments");
+                "set expects 1 or 2 arguments");
             goto cleanup;
         }
 
-        if (!variables_set(context->variables, values[1], values[2]))
+        if (count == 3)
         {
-            tcl_error_set(error, TCL_ERROR_SYSTEM, command->span.line, command->span.column, "failed to set variable");
-            goto cleanup;
+            if (!variables_set(context->variables, values[1], values[2]))
+            {
+                tcl_error_set(error, TCL_ERROR_SYSTEM, command->span.line, command->span.column, "failed to set variable");
+                goto cleanup;
+            }
         }
 
         success = 1;
@@ -541,9 +515,46 @@ static int execute_command(ExecutorContext *context, const AstCommand *command, 
         goto cleanup;
     }
 
+    if (strcmp(command_name, "puts") == 0)
+    {
+        int no_newline = 0;
+        size_t value_index = 1;
+
+        values = NULL;
+
+        if (!evaluate_words(context, command->words, count, error, &values))
+        {
+            goto cleanup;
+        }
+
+        if (count == 3 && strcmp(values[1], "-nonewline") == 0)
+        {
+            no_newline = 1;
+            value_index = 2;
+        }
+        else if (count != 2)
+        {
+            tcl_error_set(
+                error,
+                TCL_ERROR_SYNTAX,
+                command->span.line,
+                command->span.column,
+                "puts expects string or -nonewline string");
+            goto cleanup;
+        }
+
+        fprintf(context->stdout_stream, "%s", values[value_index]);
+        if (!no_newline)
+        {
+            fprintf(context->stdout_stream, "\n");
+        }
+        success = 1;
+        goto cleanup;
+    }
+
     if (strcmp(command_name, "if") == 0)
     {
-        success = validate_if_syntax(words, count, error);
+        success = validator_validate_if_words(validator, words, (int)count, error);
         goto cleanup;
     }
 
@@ -565,6 +576,26 @@ static int execute_command(ExecutorContext *context, const AstCommand *command, 
         goto cleanup;
     }
 
+    if (strcmp(command_name, "expr") == 0 ||
+        strcmp(command_name, "incr") == 0 ||
+        strcmp(command_name, "list") == 0 ||
+        strcmp(command_name, "foreach") == 0 ||
+        strcmp(command_name, "switch") == 0 ||
+        strcmp(command_name, "return") == 0 ||
+        strcmp(command_name, "break") == 0 ||
+        strcmp(command_name, "continue") == 0 ||
+        strcmp(command_name, "catch") == 0)
+    {
+        success = 1;
+        goto cleanup;
+    }
+
+    if (validator_has_procedure(validator, command_name))
+    {
+        success = 1;
+        goto cleanup;
+    }
+
     tcl_error_setf(
         error,
         TCL_ERROR_SEMANTIC,
@@ -583,16 +614,31 @@ cleanup:
 int executor_execute(ExecutorContext *context, const AstCommand *program, TclError *error)
 {
     const AstCommand *command = program;
+    ValidatorContext *validator = validator_create();
+
+    if (!validator)
+    {
+        tcl_error_set(error, TCL_ERROR_SYSTEM, 1, 1, "failed to initialize validator");
+        return 0;
+    }
+
+    if (!validator_validate_program(validator, program, error))
+    {
+        validator_destroy(validator);
+        return 0;
+    }
 
     while (command)
     {
-        if (!execute_command(context, command, error))
+        if (!execute_command(context, validator, command, error))
         {
+            validator_destroy(validator);
             return 0;
         }
 
         command = command->next;
     }
 
+    validator_destroy(validator);
     return 1;
 }

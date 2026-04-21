@@ -31,6 +31,7 @@ static TclError *s_error = NULL;
 program:
             /* empty */
         | separators
+        | separators command_list separators_opt
         | command_list separators_opt
     ;
 
@@ -53,8 +54,17 @@ command:
     words {
         SourceSpan span;
         AstCommand *command;
+        AstWord *last_word = $1;
 
-        span = $1->span;
+        while (last_word->next)
+        {
+            last_word = last_word->next;
+        }
+
+        span.line = $1->span.line;
+        span.column = $1->span.column;
+        span.end_line = last_word->span.end_line;
+        span.end_column = last_word->span.end_column;
         command = ast_command_create($1, &span);
         if (!command)
         {
@@ -82,6 +92,7 @@ word:
 
         span.line = @1.first_line;
         span.column = @1.first_column;
+        span.end_line = @1.last_line;
         span.end_column = @1.last_column;
 
         $$ = ast_word_create(AST_WORD_STRING, $1, &span);
@@ -97,6 +108,7 @@ word:
 
         span.line = @1.first_line;
         span.column = @1.first_column;
+        span.end_line = @1.last_line;
         span.end_column = @1.last_column;
 
         $$ = ast_word_create(AST_WORD_BRACED, $1, &span);
@@ -112,6 +124,7 @@ word:
 
         span.line = @1.first_line;
         span.column = @1.first_column;
+        span.end_line = @1.last_line;
         span.end_column = @1.last_column;
 
         $$ = ast_word_create(AST_WORD_VAR, $1, &span);

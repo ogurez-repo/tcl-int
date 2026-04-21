@@ -5,6 +5,7 @@ typedef struct SourceSpan
 {
     int line;
     int column;
+    int end_line;
     int end_column;
 } SourceSpan;
 

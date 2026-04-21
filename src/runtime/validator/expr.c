@@ -1,0 +1,660 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "runtime/validator/internal.h"
+
+typedef struct ExprParser
+{
+    const char *text;
+    size_t length;
+    size_t index;
+    int line;
+    int column;
+    ValidatorContext *context;
+    TclError *error;
+} ExprParser;
+
+static void expr_skip_ws(ExprParser *parser)
+{
+    while (parser->index < parser->length && isspace((unsigned char)parser->text[parser->index]))
+    {
+        parser->index++;
+    }
+}
+
+static int expr_error(ExprParser *parser, const char *message)
+{
+    tcl_error_set(parser->error, TCL_ERROR_SYNTAX, parser->line, parser->column, message);
+    return 0;
+}
+
+static int expr_match_char(ExprParser *parser, char character)
+{
+    expr_skip_ws(parser);
+    if (parser->index < parser->length && parser->text[parser->index] == character)
+    {
+        parser->index++;
+        return 1;
+    }
+    return 0;
+}
+
+static int expr_match_operator(ExprParser *parser, const char *operator_text)
+{
+    size_t operator_length;
+
+    expr_skip_ws(parser);
+    operator_length = strlen(operator_text);
+
+    if (strncmp(parser->text + parser->index, operator_text, operator_length) != 0)
+    {
+        return 0;
+    }
+
+    if ((strcmp(operator_text, "eq") == 0 ||
+         strcmp(operator_text, "ne") == 0 ||
+         strcmp(operator_text, "in") == 0 ||
+         strcmp(operator_text, "ni") == 0) &&
+        parser->index + operator_length < parser->length &&
+        (isalnum((unsigned char)parser->text[parser->index + operator_length]) ||
+         parser->text[parser->index + operator_length] == '_'))
+    {
+        return 0;
+    }
+
+    parser->index += operator_length;
+    return 1;
+}
+
+static int expr_match_single_operator(ExprParser *parser, char operator_char, char doubled_operator)
+{
+    expr_skip_ws(parser);
+    if (parser->index >= parser->length || parser->text[parser->index] != operator_char)
+    {
+        return 0;
+    }
+
+    if (parser->index + 1 < parser->length && parser->text[parser->index + 1] == doubled_operator)
+    {
+        return 0;
+    }
+
+    parser->index++;
+    return 1;
+}
+
+static int expr_parse_expression(ExprParser *parser);
+
+static int expr_parse_variable(ExprParser *parser)
+{
+    parser->index++;
+
+    if (parser->index < parser->length && parser->text[parser->index] == '{')
+    {
+        parser->index++;
+        if (parser->index < parser->length && parser->text[parser->index] == '}')
+        {
+            return expr_error(parser, "invalid variable reference");
+        }
+
+        while (parser->index < parser->length && parser->text[parser->index] != '}')
+        {
+            parser->index++;
+        }
+
+        if (parser->index >= parser->length)
+        {
+            return expr_error(parser, "unterminated variable reference");
+        }
+
+        parser->index++;
+        return 1;
+    }
+
+    if (parser->index >= parser->length ||
+        !(isalpha((unsigned char)parser->text[parser->index]) || parser->text[parser->index] == '_'))
+    {
+        return expr_error(parser, "invalid variable reference");
+    }
+
+    while (parser->index < parser->length &&
+           (isalnum((unsigned char)parser->text[parser->index]) ||
+            parser->text[parser->index] == '_' ||
+            parser->text[parser->index] == ':'))
+    {
+        parser->index++;
+    }
+
+    if (parser->index < parser->length && parser->text[parser->index] == '(')
+    {
+        int depth = 1;
+        parser->index++;
+
+        while (parser->index < parser->length)
+        {
+            if (parser->text[parser->index] == '(')
+            {
+                depth++;
+            }
+            else if (parser->text[parser->index] == ')')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    parser->index++;
+                    return 1;
+                }
+            }
+            parser->index++;
+        }
+
+        return expr_error(parser, "unterminated array variable reference");
+    }
+
+    return 1;
+}
+
+static int expr_parse_quoted(ExprParser *parser)
+{
+    size_t start = parser->index + 1;
+    size_t end;
+    char *content;
+    int result;
+
+    parser->index++;
+    while (parser->index < parser->length)
+    {
+        if (parser->text[parser->index] == '\\' && parser->index + 1 < parser->length)
+        {
+            parser->index += 2;
+            continue;
+        }
+
+        if (parser->text[parser->index] == '"')
+        {
+            end = parser->index;
+            content = validator_copy_substring(parser->text + start, end - start);
+            if (!content)
+            {
+                return expr_error(parser, "out of memory");
+            }
+            result = validator_validate_command_substitutions_in_text(
+                parser->context,
+                content,
+                parser->line,
+                parser->column,
+                parser->error);
+            free(content);
+            parser->index++;
+            return result;
+        }
+
+        parser->index++;
+    }
+
+    return expr_error(parser, "unterminated quoted string");
+}
+
+static int expr_parse_braced(ExprParser *parser)
+{
+    int depth = 1;
+
+    parser->index++;
+    while (parser->index < parser->length)
+    {
+        if (parser->text[parser->index] == '{')
+        {
+            depth++;
+        }
+        else if (parser->text[parser->index] == '}')
+        {
+            depth--;
+            if (depth == 0)
+            {
+                parser->index++;
+                return 1;
+            }
+        }
+        parser->index++;
+    }
+
+    return expr_error(parser, "unterminated braced string");
+}
+
+static int expr_parse_command_substitution(ExprParser *parser)
+{
+    size_t end;
+    char *inner;
+    int result;
+
+    if (!validator_find_matching_bracket(parser->text, parser->index, &end))
+    {
+        return expr_error(parser, "unterminated command substitution");
+    }
+
+    inner = validator_copy_substring(parser->text + parser->index + 1, end - parser->index - 1);
+    if (!inner)
+    {
+        return expr_error(parser, "out of memory");
+    }
+
+    result = validator_validate_script_text(parser->context, inner, parser->line, parser->column, parser->error);
+    free(inner);
+    if (!result)
+    {
+        return 0;
+    }
+
+    parser->index = end + 1;
+    return 1;
+}
+
+static int expr_parse_identifier_or_call(ExprParser *parser)
+{
+    while (parser->index < parser->length &&
+           (isalnum((unsigned char)parser->text[parser->index]) ||
+            parser->text[parser->index] == '_' ||
+            parser->text[parser->index] == ':'))
+    {
+        parser->index++;
+    }
+
+    expr_skip_ws(parser);
+    if (!expr_match_char(parser, '('))
+    {
+        return 1;
+    }
+
+    expr_skip_ws(parser);
+    if (expr_match_char(parser, ')'))
+    {
+        return 1;
+    }
+
+    while (1)
+    {
+        if (!expr_parse_expression(parser))
+        {
+            return 0;
+        }
+
+        expr_skip_ws(parser);
+        if (expr_match_char(parser, ')'))
+        {
+            return 1;
+        }
+
+        if (!expr_match_char(parser, ','))
+        {
+            return expr_error(parser, "expected ',' or ')' in function call");
+        }
+    }
+}
+
+static int expr_parse_number(ExprParser *parser)
+{
+    int saw_digit = 0;
+
+    while (parser->index < parser->length && isdigit((unsigned char)parser->text[parser->index]))
+    {
+        saw_digit = 1;
+        parser->index++;
+    }
+
+    if (parser->index < parser->length && parser->text[parser->index] == '.')
+    {
+        parser->index++;
+        while (parser->index < parser->length && isdigit((unsigned char)parser->text[parser->index]))
+        {
+            saw_digit = 1;
+            parser->index++;
+        }
+    }
+
+    if (!saw_digit)
+    {
+        return expr_error(parser, "invalid number");
+    }
+
+    return 1;
+}
+
+static int expr_parse_primary(ExprParser *parser)
+{
+    expr_skip_ws(parser);
+    if (parser->index >= parser->length)
+    {
+        return expr_error(parser, "invalid expression");
+    }
+
+    if (expr_match_char(parser, '('))
+    {
+        if (!expr_parse_expression(parser))
+        {
+            return 0;
+        }
+        if (!expr_match_char(parser, ')'))
+        {
+            return expr_error(parser, "expected ')' in expression");
+        }
+        return 1;
+    }
+
+    if (parser->text[parser->index] == '$')
+    {
+        return expr_parse_variable(parser);
+    }
+
+    if (parser->text[parser->index] == '[')
+    {
+        return expr_parse_command_substitution(parser);
+    }
+
+    if (parser->text[parser->index] == '"')
+    {
+        return expr_parse_quoted(parser);
+    }
+
+    if (parser->text[parser->index] == '{')
+    {
+        return expr_parse_braced(parser);
+    }
+
+    if (isdigit((unsigned char)parser->text[parser->index]) ||
+        (parser->text[parser->index] == '.' &&
+         parser->index + 1 < parser->length &&
+         isdigit((unsigned char)parser->text[parser->index + 1])))
+    {
+        return expr_parse_number(parser);
+    }
+
+    if (isalpha((unsigned char)parser->text[parser->index]) || parser->text[parser->index] == '_')
+    {
+        return expr_parse_identifier_or_call(parser);
+    }
+
+    return expr_error(parser, "invalid expression");
+}
+
+static int expr_parse_unary(ExprParser *parser)
+{
+    if (expr_match_operator(parser, "!") ||
+        expr_match_operator(parser, "-") ||
+        expr_match_operator(parser, "+"))
+    {
+        return expr_parse_unary(parser);
+    }
+
+    return expr_parse_primary(parser);
+}
+
+static int expr_parse_power(ExprParser *parser)
+{
+    if (!expr_parse_unary(parser))
+    {
+        return 0;
+    }
+
+    if (expr_match_operator(parser, "**"))
+    {
+        if (!expr_parse_power(parser))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int expr_parse_multiplicative(ExprParser *parser)
+{
+    if (!expr_parse_power(parser))
+    {
+        return 0;
+    }
+
+    while (expr_match_single_operator(parser, '*', '*') ||
+           expr_match_operator(parser, "/") ||
+           expr_match_operator(parser, "%"))
+    {
+        if (!expr_parse_power(parser))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int expr_parse_additive(ExprParser *parser)
+{
+    if (!expr_parse_multiplicative(parser))
+    {
+        return 0;
+    }
+
+    while (expr_match_operator(parser, "+") || expr_match_operator(parser, "-"))
+    {
+        if (!expr_parse_multiplicative(parser))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int expr_parse_shift(ExprParser *parser)
+{
+    if (!expr_parse_additive(parser))
+    {
+        return 0;
+    }
+
+    while (expr_match_operator(parser, "<<") || expr_match_operator(parser, ">>"))
+    {
+        if (!expr_parse_additive(parser))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int expr_parse_relational(ExprParser *parser)
+{
+    if (!expr_parse_shift(parser))
+    {
+        return 0;
+    }
+
+    while (expr_match_operator(parser, "<=") ||
+           expr_match_operator(parser, ">=") ||
+           expr_match_operator(parser, "<") ||
+           expr_match_operator(parser, ">") ||
+           expr_match_operator(parser, "in") ||
+           expr_match_operator(parser, "ni"))
+    {
+        if (!expr_parse_shift(parser))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int expr_parse_equality(ExprParser *parser)
+{
+    if (!expr_parse_relational(parser))
+    {
+        return 0;
+    }
+
+    while (expr_match_operator(parser, "==") ||
+           expr_match_operator(parser, "!=") ||
+           expr_match_operator(parser, "eq") ||
+           expr_match_operator(parser, "ne"))
+    {
+        if (!expr_parse_relational(parser))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int expr_parse_bitwise_and(ExprParser *parser)
+{
+    if (!expr_parse_equality(parser))
+    {
+        return 0;
+    }
+
+    while (expr_match_single_operator(parser, '&', '&'))
+    {
+        if (!expr_parse_equality(parser))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int expr_parse_bitwise_xor(ExprParser *parser)
+{
+    if (!expr_parse_bitwise_and(parser))
+    {
+        return 0;
+    }
+
+    while (expr_match_operator(parser, "^"))
+    {
+        if (!expr_parse_bitwise_and(parser))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int expr_parse_bitwise_or(ExprParser *parser)
+{
+    if (!expr_parse_bitwise_xor(parser))
+    {
+        return 0;
+    }
+
+    while (expr_match_single_operator(parser, '|', '|'))
+    {
+        if (!expr_parse_bitwise_xor(parser))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int expr_parse_logical_and(ExprParser *parser)
+{
+    if (!expr_parse_bitwise_or(parser))
+    {
+        return 0;
+    }
+
+    while (expr_match_operator(parser, "&&"))
+    {
+        if (!expr_parse_bitwise_or(parser))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int expr_parse_logical_or(ExprParser *parser)
+{
+    if (!expr_parse_logical_and(parser))
+    {
+        return 0;
+    }
+
+    while (expr_match_operator(parser, "||"))
+    {
+        if (!expr_parse_logical_and(parser))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int expr_parse_ternary(ExprParser *parser)
+{
+    if (!expr_parse_logical_or(parser))
+    {
+        return 0;
+    }
+
+    if (expr_match_char(parser, '?'))
+    {
+        if (!expr_parse_expression(parser))
+        {
+            return 0;
+        }
+        if (!expr_match_char(parser, ':'))
+        {
+            return expr_error(parser, "expected ':' in ternary expression");
+        }
+        if (!expr_parse_expression(parser))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int expr_parse_expression(ExprParser *parser)
+{
+    return expr_parse_ternary(parser);
+}
+
+int validator_validate_expression_text(
+    ValidatorContext *context,
+    const char *text,
+    int line,
+    int column,
+    TclError *error)
+{
+    ExprParser parser;
+
+    parser.text = text;
+    parser.length = strlen(text);
+    parser.index = 0;
+    parser.line = line;
+    parser.column = column;
+    parser.context = context;
+    parser.error = error;
+
+    if (!expr_parse_expression(&parser))
+    {
+        return 0;
+    }
+
+    expr_skip_ws(&parser);
+    if (parser.index != parser.length)
+    {
+        return expr_error(&parser, "unexpected token in expression");
+    }
+
+    return 1;
+}

@@ -17,5 +17,6 @@ char *duplicate_substring(const char *source, size_t length);
 char *duplicate_quoted_text(const char *source, size_t length);
 void lexer_set_error(TclError *error);
 void lexer_set_line(int line);
+void lexer_set_position(int line, int column);
 void lexer_reset_state(void);
 #endif
