@@ -33,7 +33,10 @@ static char *preprocess_script(const char *script)
             read_index + 1 < length &&
             (script[read_index + 1] == '\n' || script[read_index + 1] == '\r'))
         {
-            /* Tcl backslash-newline continuation: remove backslash, newline and leading spaces. */
+            /*
+             * Tcl backslash-newline continuation:
+             * replace '\' + newline + following horizontal spaces with a single space.
+             */
             read_index++;
             if (script[read_index] == '\r' &&
                 read_index + 1 < length &&
@@ -47,6 +50,8 @@ static char *preprocess_script(const char *script)
             {
                 read_index++;
             }
+
+            result[write_index++] = ' ';
             continue;
         }
 

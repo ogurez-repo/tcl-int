@@ -1,9 +1,55 @@
 #include <stdlib.h>
+#include <string.h>
 
 #include "core/ast.h"
 #include "core/errors.h"
 #include "core/script_parser.h"
 #include "runtime/executor.h"
+#include "runtime/validator.h"
+
+typedef enum ExecutionMode
+{
+    EXEC_MODE_RUN,
+    EXEC_MODE_CHECK
+} ExecutionMode;
+
+static void print_error(FILE *stream, const TclError *error)
+{
+    fprintf(
+        stream,
+        "%s error at %d:%d: %s\n",
+        tcl_error_type_name(error->type),
+        error->line,
+        error->column,
+        error->message);
+}
+
+static int parse_execution_mode(int argc, char **argv, ExecutionMode *mode)
+{
+    if (argc <= 1)
+    {
+        *mode = EXEC_MODE_RUN;
+        return 1;
+    }
+
+    if (argc == 2)
+    {
+        if (strcmp(argv[1], "--run") == 0)
+        {
+            *mode = EXEC_MODE_RUN;
+            return 1;
+        }
+
+        if (strcmp(argv[1], "--check") == 0)
+        {
+            *mode = EXEC_MODE_CHECK;
+            return 1;
+        }
+    }
+
+    fprintf(stderr, "usage: %s [--run|--check]\n", argv[0]);
+    return 0;
+}
 
 static char *read_all_stdin(void)
 {
@@ -46,18 +92,28 @@ static char *read_all_stdin(void)
     return buffer;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     char *script;
     TclError error;
     AstCommand *program;
-    ExecutorContext *context;
+    ExecutionMode mode;
+    ValidatorContext *validator = NULL;
+    ExecutorContext *context = NULL;
 
-    context = executor_create(stdout, stderr);
-    if (!context)
+    if (!parse_execution_mode(argc, argv, &mode))
     {
-        fprintf(stderr, "failed to initialize executor\n");
         return EXIT_FAILURE;
+    }
+
+    if (mode == EXEC_MODE_RUN)
+    {
+        context = executor_create(stdout, stderr);
+        if (!context)
+        {
+            fprintf(stderr, "failed to initialize executor\n");
+            return EXIT_FAILURE;
+        }
     }
 
     script = read_all_stdin();
@@ -74,38 +130,47 @@ int main(void)
     if (!program && error.type != TCL_ERROR_NONE)
     {
         free(script);
-
-        fprintf(
-            stderr,
-            "%s error at %d:%d: %s\n",
-            tcl_error_type_name(error.type),
-            error.line,
-            error.column,
-            error.message);
-
+        print_error(stderr, &error);
         executor_destroy(context);
         return EXIT_FAILURE;
     }
 
-    if (!executor_execute(context, program, &error))
+    if (mode == EXEC_MODE_CHECK)
     {
-        ast_command_free(program);
-        free(script);
+        validator = validator_create();
+        if (!validator)
+        {
+            ast_command_free(program);
+            free(script);
+            tcl_error_set(&error, TCL_ERROR_SYSTEM, 1, 1, "failed to initialize validator");
+            print_error(stderr, &error);
+            return EXIT_FAILURE;
+        }
 
-        fprintf(
-            stderr,
-            "%s error at %d:%d: %s\n",
-            tcl_error_type_name(error.type),
-            error.line,
-            error.column,
-            error.message);
-        executor_destroy(context);
-        return EXIT_FAILURE;
+        if (!validator_validate_program(validator, program, &error))
+        {
+            validator_destroy(validator);
+            ast_command_free(program);
+            free(script);
+            print_error(stderr, &error);
+            return EXIT_FAILURE;
+        }
+    }
+    else
+    {
+        if (!executor_execute(context, program, &error))
+        {
+            ast_command_free(program);
+            free(script);
+            print_error(stderr, &error);
+            executor_destroy(context);
+            return EXIT_FAILURE;
+        }
     }
 
+    validator_destroy(validator);
     ast_command_free(program);
     free(script);
-
     executor_destroy(context);
-    return 0;
+    return EXIT_SUCCESS;
 }

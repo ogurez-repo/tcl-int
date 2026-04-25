@@ -9,6 +9,7 @@
 
 static int input(void);
 static void yyunput(int character, char *buffer_pointer);
+static int scanner_next_char_no_refill(void);
 
 static TclError *s_error = NULL;
 static int s_line = 1;
@@ -207,7 +208,6 @@ static char *scan_unquoted_word(const char *initial_text, size_t initial_length)
     int brace_depth = 0;
     int in_quote = 0;
     int escaped;
-    int saw_bracket = 0;
     size_t index;
 
     if (!lexer_buffer_init(&buffer, initial_text, initial_length))
@@ -218,10 +218,6 @@ static char *scan_unquoted_word(const char *initial_text, size_t initial_length)
     escaped = 0;
     for (index = 0; index < buffer.length; index++)
     {
-        if (buffer.data[index] == '[')
-        {
-            saw_bracket = 1;
-        }
         update_bracket_state(buffer.data[index], &bracket_depth, &brace_depth, &in_quote, &escaped);
     }
 
@@ -229,9 +225,9 @@ static char *scan_unquoted_word(const char *initial_text, size_t initial_length)
 
     while (1)
     {
-        int character = input();
+        int character = scanner_next_char_no_refill();
 
-        if (character == EOF)
+        if (character == EOF || character == 0)
         {
             if (bracket_depth > 0 && s_error)
             {
@@ -241,6 +237,14 @@ static char *scan_unquoted_word(const char *initial_text, size_t initial_length)
                     yylloc.first_line,
                     yylloc.first_column,
                     "unterminated command substitution");
+
+                /*
+                 * Keep the partially scanned token and let the validator report
+                 * a stable syntax error instead of forcing INVALID at EOF.
+                 */
+                yylloc.last_line = s_line;
+                yylloc.last_column = s_column > 1 ? s_column - 1 : s_column;
+                return buffer.data;
             }
             lexer_buffer_free(&buffer);
             return NULL;
@@ -265,6 +269,29 @@ static char *scan_unquoted_word(const char *initial_text, size_t initial_length)
     yylloc.last_line = s_line;
     yylloc.last_column = s_column - 1;
     return buffer.data;
+}
+
+static int scanner_next_char_no_refill(void)
+{
+    *(yy_c_buf_p) = yy_hold_char;
+
+    if (*(yy_c_buf_p) == YY_END_OF_BUFFER_CHAR)
+    {
+        if ((yy_c_buf_p) < &YY_CURRENT_BUFFER_LVALUE->yy_ch_buf[(yy_n_chars)])
+        {
+            *(yy_c_buf_p) = '\0';
+        }
+        else
+        {
+            return EOF;
+        }
+    }
+
+    {
+        int character = (unsigned char)*(yy_c_buf_p);
+        yy_hold_char = *++(yy_c_buf_p);
+        return character;
+    }
 }
 
 static char *scan_quoted_word(void)
@@ -415,7 +442,24 @@ static void advance_line(const char *text, int length)
     }
 
     BEGIN(INITIAL);
-    return STRING;
+    return QUOTED;
+}
+
+<CMDSTART,INITIAL>\{\*\} {
+    int next_character = scanner_next_char_no_refill();
+
+    if (next_character != EOF)
+    {
+        unput(next_character);
+    }
+
+    BEGIN(INITIAL);
+    if (next_character == EOF || is_word_delimiter(next_character))
+    {
+        return EXPAND_EMPTY;
+    }
+
+    return EXPAND_PREFIX;
 }
 
 <CMDSTART,INITIAL>\{ {
@@ -559,7 +603,7 @@ static void advance_line(const char *text, int length)
     }
 
     BEGIN(INITIAL);
-    return VAR;
+    return VAR_BRACED;
 }
 
 <CMDSTART,INITIAL>\$[A-Za-z_][A-Za-z0-9_:]* {

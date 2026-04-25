@@ -140,9 +140,26 @@ int validator_validate_command_substitutions_in_text(
     size_t length = strlen(text);
     int line = start_line;
     int column = start_column;
+    int escaped = 0;
 
     while (index < length)
     {
+        if (escaped)
+        {
+            escaped = 0;
+            validator_advance_position(text[index], &line, &column);
+            index++;
+            continue;
+        }
+
+        if (text[index] == '\\')
+        {
+            escaped = 1;
+            validator_advance_position(text[index], &line, &column);
+            index++;
+            continue;
+        }
+
         if (text[index] == '[')
         {
             size_t end;

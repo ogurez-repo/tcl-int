@@ -31,6 +31,7 @@ int validator_word_is_literal_name(const AstWord *word);
 int validator_word_is_literal_keyword(const AstWord *word, const char *keyword);
 int validator_word_is_literal_script(const AstWord *word);
 int validator_syntax_error_at_word(TclError *error, const AstWord *word, const char *message);
+int validator_parse_list_item(const char *text, size_t *index, char **item);
 
 Procedure *validator_find_procedure(ValidatorContext *context, const char *name);
 int validator_add_or_update_procedure(

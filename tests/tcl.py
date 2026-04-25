@@ -9,13 +9,17 @@ class Tcl:
     def command(self, text: str) -> None:
         self._script_lines.append(text)
 
-    def run(self) -> subprocess.CompletedProcess[str]:
+    def run(self, args: list[str] | None = None) -> subprocess.CompletedProcess[str]:
         script = "\n".join(self._script_lines)
         if script:
             script += "\n"
 
+        command = [self.tcl_path]
+        if args:
+            command.extend(args)
+
         return subprocess.run(
-            [self.tcl_path],
+            command,
             input=script,
             text=True,
             capture_output=True,

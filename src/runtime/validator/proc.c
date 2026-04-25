@@ -4,69 +4,18 @@
 
 #include "runtime/validator/internal.h"
 
-static int parse_list_item(const char *text, size_t *index, char **item)
-{
-    size_t length = strlen(text);
-    size_t start;
-
-    while (*index < length && isspace((unsigned char)text[*index]))
-    {
-        (*index)++;
-    }
-
-    if (*index >= length)
-    {
-        *item = NULL;
-        return 1;
-    }
-
-    if (text[*index] == '{')
-    {
-        int depth = 1;
-        start = ++(*index);
-        while (*index < length)
-        {
-            if (text[*index] == '{')
-            {
-                depth++;
-            }
-            else if (text[*index] == '}')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    *item = validator_copy_substring(text + start, *index - start);
-                    (*index)++;
-                    return *item != NULL;
-                }
-            }
-            (*index)++;
-        }
-        return 0;
-    }
-
-    start = *index;
-    while (*index < length && !isspace((unsigned char)text[*index]))
-    {
-        (*index)++;
-    }
-
-    *item = validator_copy_substring(text + start, *index - start);
-    return *item != NULL;
-}
-
 static int split_arg_spec(const char *item, char **name, int *has_default)
 {
     size_t index = 0;
     char *first;
     char *second;
 
-    if (!parse_list_item(item, &index, &first) || !first)
+    if (!validator_parse_list_item(item, &index, &first) || !first)
     {
         return 0;
     }
 
-    if (!parse_list_item(item, &index, &second))
+    if (!validator_parse_list_item(item, &index, &second))
     {
         free(first);
         return 0;
@@ -115,7 +64,7 @@ static int parse_proc_args(
         char *name = NULL;
         int has_default = 0;
 
-        if (!parse_list_item(args_word->text, &index, &item))
+        if (!validator_parse_list_item(args_word->text, &index, &item))
         {
             free(item);
             return validator_syntax_error_at_word(error, args_word, "invalid proc argument list");

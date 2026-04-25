@@ -19,8 +19,12 @@ static TclError *s_error = NULL;
 }
 
 %token <str> STRING
+%token <str> QUOTED
 %token <str> BRACED
 %token <str> VAR
+%token <str> VAR_BRACED
+%token EXPAND_EMPTY
+%token EXPAND_PREFIX
 %token CMDSEP
 %token INVALID
 
@@ -103,6 +107,22 @@ word:
             YYERROR;
         }
     }
+    | QUOTED {
+        SourceSpan span;
+
+        span.line = @1.first_line;
+        span.column = @1.first_column;
+        span.end_line = @1.last_line;
+        span.end_column = @1.last_column;
+
+        $$ = ast_word_create(AST_WORD_QUOTED, $1, &span);
+        if (!$$)
+        {
+            free($1);
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
+            YYERROR;
+        }
+    }
     | BRACED {
         SourceSpan span;
 
@@ -131,6 +151,125 @@ word:
         if (!$$)
         {
             free($1);
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
+            YYERROR;
+        }
+    }
+    | VAR_BRACED {
+        SourceSpan span;
+
+        span.line = @1.first_line;
+        span.column = @1.first_column;
+        span.end_line = @1.last_line;
+        span.end_column = @1.last_column;
+
+        $$ = ast_word_create(AST_WORD_VAR_BRACED, $1, &span);
+        if (!$$)
+        {
+            free($1);
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
+            YYERROR;
+        }
+    }
+    | EXPAND_EMPTY {
+        SourceSpan span;
+        char *empty_text = duplicate_substring("", 0);
+
+        if (!empty_text)
+        {
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, @1.first_line, @1.first_column, "out of memory");
+            YYERROR;
+        }
+
+        span.line = @1.first_line;
+        span.column = @1.first_column;
+        span.end_line = @1.last_line;
+        span.end_column = @1.last_column;
+
+        $$ = ast_word_create(AST_WORD_EXPAND_EMPTY, empty_text, &span);
+        if (!$$)
+        {
+            free(empty_text);
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
+            YYERROR;
+        }
+    }
+    | EXPAND_PREFIX STRING {
+        SourceSpan span;
+
+        span.line = @1.first_line;
+        span.column = @1.first_column;
+        span.end_line = @2.last_line;
+        span.end_column = @2.last_column;
+
+        $$ = ast_word_create(AST_WORD_EXPAND_STRING, $2, &span);
+        if (!$$)
+        {
+            free($2);
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
+            YYERROR;
+        }
+    }
+    | EXPAND_PREFIX QUOTED {
+        SourceSpan span;
+
+        span.line = @1.first_line;
+        span.column = @1.first_column;
+        span.end_line = @2.last_line;
+        span.end_column = @2.last_column;
+
+        $$ = ast_word_create(AST_WORD_EXPAND_QUOTED, $2, &span);
+        if (!$$)
+        {
+            free($2);
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
+            YYERROR;
+        }
+    }
+    | EXPAND_PREFIX BRACED {
+        SourceSpan span;
+
+        span.line = @1.first_line;
+        span.column = @1.first_column;
+        span.end_line = @2.last_line;
+        span.end_column = @2.last_column;
+
+        $$ = ast_word_create(AST_WORD_EXPAND_BRACED, $2, &span);
+        if (!$$)
+        {
+            free($2);
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
+            YYERROR;
+        }
+    }
+    | EXPAND_PREFIX VAR {
+        SourceSpan span;
+
+        span.line = @1.first_line;
+        span.column = @1.first_column;
+        span.end_line = @2.last_line;
+        span.end_column = @2.last_column;
+
+        $$ = ast_word_create(AST_WORD_EXPAND_VAR, $2, &span);
+        if (!$$)
+        {
+            free($2);
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
+            YYERROR;
+        }
+    }
+    | EXPAND_PREFIX VAR_BRACED {
+        SourceSpan span;
+
+        span.line = @1.first_line;
+        span.column = @1.first_column;
+        span.end_line = @2.last_line;
+        span.end_column = @2.last_column;
+
+        $$ = ast_word_create(AST_WORD_EXPAND_VAR_BRACED, $2, &span);
+        if (!$$)
+        {
+            free($2);
             tcl_error_set(s_error, TCL_ERROR_SYSTEM, span.line, span.column, "out of memory");
             YYERROR;
         }

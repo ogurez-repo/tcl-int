@@ -26,28 +26,13 @@ char *duplicate_quoted_text(const char *source, size_t length)
     }
 
     char *result = (char *)malloc(length - 1);
-    size_t read_index;
-    size_t write_index;
 
     if (!result)
     {
         return NULL;
     }
 
-    read_index = 1;
-    write_index = 0;
-
-    while (read_index + 1 < length)
-    {
-        if (source[read_index] == '\\' && read_index + 2 < length)
-        {
-            read_index++;
-        }
-
-        result[write_index++] = source[read_index++];
-    }
-
-    result[write_index] = '\0';
+    memcpy(result, source + 1, length - 2);
+    result[length - 2] = '\0';
     return result;
 }
-

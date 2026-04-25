@@ -162,6 +162,16 @@ def test_while_syntax_is_accepted_without_execution(tcl: Tcl):
     assert result.stdout == ""
 
 
+def test_while_with_unary_bitwise_not_expr_is_accepted(tcl: Tcl):
+    tcl.command("while {~1} {put x}")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == ""
+
+
 def test_while_argument_error_is_syntax_error(tcl: Tcl):
     tcl.command("while {$x < 10}")
 
@@ -221,6 +231,16 @@ def test_quoted_interpolated_set_command(tcl: Tcl):
     assert result.stdout.strip() == "a"
 
 
+def test_quoted_literal_command_name_is_supported(tcl: Tcl):
+    tcl.command('"puts" hello')
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "hello"
+
+
 def test_quoted_prefixed_interpolated_set_command(tcl: Tcl):
     tcl.set("a", "et")
     tcl.command('"s$a" bbbb b')
@@ -231,6 +251,56 @@ def test_quoted_prefixed_interpolated_set_command(tcl: Tcl):
     assert result.returncode == 0
     assert result.stderr == ""
     assert result.stdout.strip() == "b"
+
+
+def test_quoted_backslash_escape_sequences_are_interpreted(tcl: Tcl):
+    tcl.command('puts "line1\\nline2\\tend"')
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == "line1\nline2\tend\n"
+
+
+def test_quoted_octal_hex_unicode_escape_sequences_are_interpreted(tcl: Tcl):
+    tcl.command('puts "\\101\\x42\\u0043\\U00000044"')
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == "ABCD\n"
+
+
+def test_quoted_incomplete_hex_unicode_escapes_fall_back_to_literal(tcl: Tcl):
+    tcl.command('puts "\\x\\u\\U"')
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == "xuU\n"
+
+
+def test_escaped_command_substitution_in_quotes_is_literal(tcl: Tcl):
+    tcl.command('puts "\\[expr {1 + 2}\\]"')
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "[expr {1 + 2}]"
+
+
+def test_escaped_unterminated_bracket_in_quotes_is_not_command_substitution(tcl: Tcl):
+    tcl.command('puts "\\["')
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "["
 
 
 def test_set_overwrites_existing_variable(tcl: Tcl):
@@ -470,6 +540,86 @@ def test_invalid_expr_is_error(tcl: Tcl):
     assert "invalid expression" in result.stderr
 
 
+def test_invalid_expr_bareword_is_error(tcl: Tcl):
+    tcl.command("expr {abc}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "invalid bareword in expression" in result.stderr
+
+
+def test_if_expr_allows_namespace_variable_reference(tcl: Tcl):
+    tcl.command("if {$::x > 0} {puts ok}")
+
+    result = tcl.run(args=["--check"])
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
+def test_if_expr_allows_empty_array_name_variable_reference(tcl: Tcl):
+    tcl.command("if {$(k) > 0} {puts ok}")
+
+    result = tcl.run(args=["--check"])
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
+def test_expr_accepts_scientific_and_prefixed_numbers(tcl: Tcl):
+    tcl.command("expr {1e3 > 0}")
+    tcl.command("expr {1.2e-3 > 0}")
+    tcl.command("expr {0x10 == 16}")
+    tcl.command("expr {0b1010 == 10}")
+    tcl.command("expr {0o17 == 15}")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
+def test_invalid_scientific_literal_is_error(tcl: Tcl):
+    tcl.command("expr {1e + 1}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "invalid number" in result.stderr
+
+
+def test_invalid_prefixed_literal_without_digits_is_error(tcl: Tcl):
+    tcl.command("expr {0x + 1}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "invalid number" in result.stderr
+
+
+def test_invalid_legacy_octal_literal_is_error(tcl: Tcl):
+    tcl.command("if {08 > 0} {puts ok}")
+
+    result = tcl.run(args=["--check"])
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "invalid number" in result.stderr
+
+
+def test_legacy_octal_literal_is_accepted(tcl: Tcl):
+    tcl.command("if {017 > 0} {puts ok}")
+
+    result = tcl.run(args=["--check"])
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
 def test_leading_comment_before_command_is_accepted(tcl: Tcl):
     tcl.command("# comment")
     tcl.command("set a 1")
@@ -512,23 +662,33 @@ def test_embedded_top_level_command_substitution_is_structurally_accepted(tcl: T
     assert result.stderr == ""
 
 
-def test_backslash_newline_continuation_is_not_command_separator(tcl: Tcl):
+def test_backslash_newline_continuation_replaces_with_space(tcl: Tcl):
     tcl.command("set a hello\\")
     tcl.command("world")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert result.stderr == "syntax error at 1:1: set expects 1 or 2 arguments\n"
+
+
+def test_backslash_newline_continuation_inside_quotes_keeps_single_word(tcl: Tcl):
+    tcl.command('set a "hello\\')
+    tcl.command('world"')
     tcl.command("puts $a")
 
     result = tcl.run()
 
     assert result.returncode == 0
     assert result.stderr == ""
-    assert result.stdout.strip() == "helloworld"
-    assert "unknown command 'world'" not in result.stderr
+    assert result.stdout.strip() == "hello world"
 
 
 def test_extended_expr_operators_are_accepted(tcl: Tcl):
     tcl.command("expr {2 ** 3}")
     tcl.command("expr {1 & 3}")
     tcl.command("expr {1 << 2}")
+    tcl.command("expr {~1}")
 
     result = tcl.run()
 
@@ -545,6 +705,109 @@ def test_array_variable_reference_is_supported(tcl: Tcl):
     assert result.returncode == 0
     assert result.stderr == ""
     assert result.stdout.strip() == "1"
+
+
+def test_array_variable_reference_with_substituted_index_is_supported(tcl: Tcl):
+    tcl.command("set b x")
+    tcl.command("set a(x) 42")
+    tcl.command("puts $a($b)")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "42"
+
+
+def test_braced_variable_reference_keeps_literal_name(tcl: Tcl):
+    tcl.command("set b x")
+    tcl.command("set {a($b)} 9")
+    tcl.command("puts ${a($b)}")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "9"
+
+
+def test_single_colon_is_not_treated_as_namespace_separator_in_variable_name(tcl: Tcl):
+    tcl.command("set a 1")
+    tcl.command('puts "$a:b"')
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "1:b"
+
+
+def test_namespace_separator_variable_reference_is_supported(tcl: Tcl):
+    tcl.command("set ::ns::value 5")
+    tcl.command("puts $::ns::value")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "5"
+
+
+def test_empty_array_name_variable_reference_is_supported(tcl: Tcl):
+    tcl.command("set (k) 9")
+    tcl.command("puts $(k)")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "9"
+
+
+def test_argument_expansion_from_variable_list_is_supported(tcl: Tcl):
+    tcl.command("set pair {name value}")
+    tcl.command("set {*}$pair")
+    tcl.command("puts $name")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "value"
+
+
+def test_argument_expansion_from_braced_list_is_supported(tcl: Tcl):
+    tcl.command("set {*}{x 7}")
+    tcl.command("puts $x")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "7"
+
+
+def test_argument_expansion_applies_backslash_substitution_in_list_parser(tcl: Tcl):
+    tcl.command("set pair {{x} \\x37}")
+    tcl.command("set {*}$pair")
+    tcl.command("puts $x")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "7"
+
+
+def test_argument_expansion_with_malformed_list_is_error(tcl: Tcl):
+    tcl.command('set pair "a {b"')
+    tcl.command("set {*}$pair")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "malformed list for argument expansion" in result.stderr
 
 
 def test_puts_nonewline(tcl: Tcl):
@@ -568,6 +831,36 @@ def test_foreach_is_validation_only(tcl: Tcl):
     assert result.stdout == ""
 
 
+def test_foreach_quoted_varlist_with_multiple_names_is_valid(tcl: Tcl):
+    tcl.command('foreach "x y" {a b} {puts $x}')
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == ""
+
+
+def test_foreach_empty_varlist_is_error(tcl: Tcl):
+    tcl.command("foreach {} {a b} {puts x}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "foreach varlist is empty" in result.stderr
+
+
+def test_foreach_malformed_literal_varlist_is_error(tcl: Tcl):
+    tcl.command('foreach "x {y" {a b} {puts x}')
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "invalid foreach variable list" in result.stderr
+
+
 def test_switch_braced_cases_are_validated(tcl: Tcl):
     tcl.command("switch -- $x {a {puts a} default {puts d}}")
 
@@ -576,6 +869,86 @@ def test_switch_braced_cases_are_validated(tcl: Tcl):
     assert result.returncode == 0
     assert result.stderr == ""
     assert result.stdout == ""
+
+
+def test_switch_braced_cases_accept_quoted_pattern_with_spaces(tcl: Tcl):
+    tcl.command('switch -- "a a" {"a a" {puts yes} default {puts no}}')
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == ""
+
+
+def test_switch_glob_option_is_validated(tcl: Tcl):
+    tcl.command("switch -glob abc {a* {puts yes} default {puts no}}")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == ""
+
+
+def test_switch_regexp_matchvar_indexvar_options_are_validated(tcl: Tcl):
+    tcl.command("switch -regexp -matchvar m -indexvar i -- abc {a(b)c {puts yes} default {puts no}}")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == ""
+
+
+def test_switch_unknown_option_is_error(tcl: Tcl):
+    tcl.command("switch -bad abc {a {puts yes} default {puts no}}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "unknown switch option" in result.stderr
+
+
+def test_switch_matchvar_requires_regexp_option(tcl: Tcl):
+    tcl.command("switch -matchvar m -- abc {abc {puts yes}}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "-matchvar option requires -regexp option" in result.stderr
+
+
+def test_switch_indexvar_requires_regexp_option(tcl: Tcl):
+    tcl.command("switch -indexvar i -- abc {abc {puts yes}}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "-indexvar option requires -regexp option" in result.stderr
+
+
+def test_switch_matchvar_before_regexp_is_valid(tcl: Tcl):
+    tcl.command("switch -matchvar m -regexp -- abc {abc {puts yes}}")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == ""
+
+
+def test_switch_options_without_string_and_cases_is_error(tcl: Tcl):
+    tcl.command("switch -regexp -matchvar m")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "switch expects string and cases" in result.stderr
 
 
 def test_incr_is_validation_only_in_for_next(tcl: Tcl):
@@ -626,6 +999,26 @@ def test_malformed_switch_case_list_is_error(tcl: Tcl):
     assert result.returncode != 0
     assert "syntax error" in result.stderr
     assert "switch expects pattern/body pairs" in result.stderr
+
+
+def test_switch_trailing_dash_body_in_braced_form_is_error(tcl: Tcl):
+    tcl.command("switch -- a {a -}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "switch pattern has no body" in result.stderr
+
+
+def test_switch_trailing_dash_body_in_pairs_form_is_error(tcl: Tcl):
+    tcl.command("switch -- a a -")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "syntax error" in result.stderr
+    assert "switch pattern has no body" in result.stderr
 
 
 def test_invalid_puts_arity_is_error(tcl: Tcl):

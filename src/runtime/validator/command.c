@@ -1,4 +1,3 @@
-#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -6,17 +5,62 @@
 
 static int validate_word_substitutions(ValidatorContext *context, const AstWord *word, TclError *error)
 {
-    if (word->type != AST_WORD_STRING)
+    if (word->type == AST_WORD_VAR || word->type == AST_WORD_EXPAND_VAR)
+    {
+        const char *open_paren = strchr(word->text, '(');
+        const char *close_paren;
+        char *index_text;
+        int result;
+
+        if (!open_paren)
+        {
+            return 1;
+        }
+
+        close_paren = strrchr(word->text, ')');
+        if (!close_paren || close_paren < open_paren)
+        {
+            return validator_syntax_error_at_word(error, word, "unterminated array variable reference");
+        }
+
+        index_text = validator_copy_substring(open_paren + 1, (size_t)(close_paren - open_paren - 1));
+        if (!index_text)
+        {
+            tcl_error_set(error, TCL_ERROR_SYSTEM, word->span.line, word->span.column, "out of memory");
+            return 0;
+        }
+
+        result = validator_validate_command_substitutions_in_text(
+            context,
+            index_text,
+            word->span.line,
+            word->span.column,
+            error);
+        free(index_text);
+        return result;
+    }
+
+    if (word->type == AST_WORD_STRING ||
+        word->type == AST_WORD_QUOTED ||
+        word->type == AST_WORD_EXPAND_STRING ||
+        word->type == AST_WORD_EXPAND_QUOTED)
+    {
+        return validator_validate_command_substitutions_in_text(
+            context,
+            word->text,
+            word->span.line,
+            word->span.column,
+            error);
+    }
+
+    if (word->type == AST_WORD_EXPAND_VAR_BRACED ||
+        word->type == AST_WORD_EXPAND_EMPTY ||
+        word->type == AST_WORD_EXPAND_BRACED)
     {
         return 1;
     }
 
-    return validator_validate_command_substitutions_in_text(
-        context,
-        word->text,
-        word->span.line,
-        word->span.column,
-        error);
+    return 1;
 }
 
 static int validate_words_substitutions(ValidatorContext *context, const AstCommand *command, TclError *error)
@@ -47,7 +91,7 @@ static int validate_script_word(ValidatorContext *context, const AstWord *word, 
 
 static int validate_expr_word(ValidatorContext *context, const AstWord *word, TclError *error)
 {
-    if (word->type == AST_WORD_VAR)
+    if (word->type == AST_WORD_VAR || word->type == AST_WORD_VAR_BRACED)
     {
         return 1;
     }
@@ -100,63 +144,59 @@ static int validate_if_command(ValidatorContext *context, const AstCommand *comm
     return result;
 }
 
-static int parse_list_item(const char *text, size_t *index, char **item)
+static int validate_foreach_varlist_word(const AstWord *varlist_word, TclError *error)
 {
-    size_t length = strlen(text);
-    size_t start;
+    size_t index = 0;
+    size_t item_count = 0;
 
-    while (*index < length && isspace((unsigned char)text[*index]))
+    if (!validator_word_is_literal_script(varlist_word))
     {
-        (*index)++;
-    }
-
-    if (*index >= length)
-    {
-        *item = NULL;
         return 1;
     }
 
-    if (text[*index] == '{')
+    while (1)
     {
-        int depth = 1;
-        start = ++(*index);
-        while (*index < length)
+        char *item = NULL;
+
+        if (!validator_parse_list_item(varlist_word->text, &index, &item))
         {
-            if (text[*index] == '{')
-            {
-                depth++;
-            }
-            else if (text[*index] == '}')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    *item = validator_copy_substring(text + start, *index - start);
-                    (*index)++;
-                    return *item != NULL;
-                }
-            }
-            (*index)++;
+            free(item);
+            return validator_syntax_error_at_word(error, varlist_word, "invalid foreach variable list");
         }
-        return 0;
+
+        if (!item)
+        {
+            break;
+        }
+
+        item_count++;
+        free(item);
     }
 
-    start = *index;
-    while (*index < length && !isspace((unsigned char)text[*index]))
+    if (item_count == 0)
     {
-        (*index)++;
+        return validator_syntax_error_at_word(error, varlist_word, "foreach varlist is empty");
     }
 
-    *item = validator_copy_substring(text + start, *index - start);
-    return *item != NULL;
+    return 1;
 }
 
 static int validate_foreach_command(ValidatorContext *context, const AstCommand *command, int count, TclError *error)
 {
+    int index;
+
     if (count < 4 || ((count - 2) % 2) != 0)
     {
         tcl_error_set(error, TCL_ERROR_SYNTAX, command->span.line, command->span.column, "foreach expects var/list pairs and body");
         return 0;
+    }
+
+    for (index = 1; index < count - 1; index += 2)
+    {
+        if (!validate_foreach_varlist_word(validator_word_at(command, index), error))
+        {
+            return 0;
+        }
     }
 
     return validate_script_word(context, validator_word_at(command, count - 1), error);
@@ -183,13 +223,14 @@ static int validate_switch_braced_cases(
 {
     size_t index = 0;
     int item_count = 0;
+    int needs_following_body = 0;
 
     while (1)
     {
         char *pattern = NULL;
         char *body = NULL;
 
-        if (!parse_list_item(cases_word->text, &index, &pattern))
+        if (!validator_parse_list_item(cases_word->text, &index, &pattern))
         {
             free(pattern);
             return validator_syntax_error_at_word(error, cases_word, "invalid switch case list");
@@ -200,7 +241,7 @@ static int validate_switch_braced_cases(
             break;
         }
 
-        if (!parse_list_item(cases_word->text, &index, &body) || !body)
+        if (!validator_parse_list_item(cases_word->text, &index, &body) || !body)
         {
             free(pattern);
             free(body);
@@ -215,6 +256,7 @@ static int validate_switch_braced_cases(
             return 0;
         }
 
+        needs_following_body = (strcmp(body, "-") == 0);
         free(pattern);
         free(body);
     }
@@ -224,16 +266,111 @@ static int validate_switch_braced_cases(
         return validator_syntax_error_at_word(error, cases_word, "switch expects pattern/body pairs");
     }
 
+    if (needs_following_body)
+    {
+        return validator_syntax_error_at_word(error, cases_word, "switch pattern has no body");
+    }
+
     return 1;
 }
 
 static int validate_switch_command(ValidatorContext *context, const AstCommand *command, int count, TclError *error)
 {
     int index = 1;
+    int remaining_args = count - 1;
+    int saw_regexp = 0;
+    int matchvar_option_index = -1;
+    int indexvar_option_index = -1;
 
-    if (index < count && validator_word_is_literal_keyword(validator_word_at(command, index), "--"))
+    /*
+     * Tcl special case: with exactly two switch arguments (string + cases),
+     * a leading '-' word is treated as the string, not as an option.
+     */
+    if (remaining_args != 2)
     {
-        index++;
+        while (index < count)
+        {
+            const AstWord *option = validator_word_at(command, index);
+
+            if (!validator_word_is_literal_name(option))
+            {
+                break;
+            }
+
+            if (strcmp(option->text, "--") == 0)
+            {
+                index++;
+                break;
+            }
+
+            if (strcmp(option->text, "-exact") == 0 ||
+                strcmp(option->text, "-glob") == 0 ||
+                strcmp(option->text, "-nocase") == 0)
+            {
+                index++;
+                continue;
+            }
+
+            if (strcmp(option->text, "-regexp") == 0)
+            {
+                saw_regexp = 1;
+                index++;
+                continue;
+            }
+
+            if (strcmp(option->text, "-matchvar") == 0 ||
+                strcmp(option->text, "-indexvar") == 0)
+            {
+                const AstWord *variable_name;
+
+                if (index + 1 >= count)
+                {
+                    return validator_syntax_error_at_word(error, option, "switch option expects a variable name");
+                }
+
+                variable_name = validator_word_at(command, index + 1);
+                if (!validator_word_is_literal_name(variable_name))
+                {
+                    return validator_syntax_error_at_word(error, option, "switch option expects a variable name");
+                }
+
+                if (strcmp(option->text, "-matchvar") == 0 && matchvar_option_index < 0)
+                {
+                    matchvar_option_index = index;
+                }
+                if (strcmp(option->text, "-indexvar") == 0 && indexvar_option_index < 0)
+                {
+                    indexvar_option_index = index;
+                }
+
+                index += 2;
+                continue;
+            }
+
+            if (option->text[0] == '-')
+            {
+                return validator_syntax_error_at_word(error, option, "unknown switch option");
+            }
+
+            break;
+        }
+    }
+
+    if (!saw_regexp && (matchvar_option_index >= 0 || indexvar_option_index >= 0))
+    {
+        if (matchvar_option_index >= 0 &&
+            (indexvar_option_index < 0 || matchvar_option_index < indexvar_option_index))
+        {
+            return validator_syntax_error_at_word(
+                error,
+                validator_word_at(command, matchvar_option_index),
+                "-matchvar option requires -regexp option");
+        }
+
+        return validator_syntax_error_at_word(
+            error,
+            validator_word_at(command, indexvar_option_index),
+            "-indexvar option requires -regexp option");
     }
 
     if (count - index < 2)
@@ -265,6 +402,10 @@ static int validate_switch_command(ValidatorContext *context, const AstCommand *
 
         if (validator_word_is_literal_keyword(body, "-"))
         {
+            if (index + 2 >= count)
+            {
+                return validator_syntax_error_at_word(error, body, "switch pattern has no body");
+            }
             index += 2;
             continue;
         }
