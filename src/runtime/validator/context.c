@@ -50,6 +50,27 @@ int validator_add_or_update_procedure(
     TclError *error,
     const AstWord *source)
 {
+    return validator_declare_procedure(
+        context,
+        name,
+        required_count,
+        max_count,
+        variadic,
+        error,
+        source->span.line,
+        source->span.column);
+}
+
+int validator_declare_procedure(
+    ValidatorContext *context,
+    const char *name,
+    size_t required_count,
+    size_t max_count,
+    int variadic,
+    TclError *error,
+    int line,
+    int column)
+{
     Procedure *procedure = validator_find_procedure(context, name);
 
     if (procedure)
@@ -63,7 +84,7 @@ int validator_add_or_update_procedure(
     procedure = (Procedure *)malloc(sizeof(Procedure));
     if (!procedure)
     {
-        tcl_error_set(error, TCL_ERROR_SYSTEM, source->span.line, source->span.column, "out of memory");
+        tcl_error_set(error, TCL_ERROR_SYSTEM, line, column, "out of memory");
         return 0;
     }
 
@@ -71,7 +92,7 @@ int validator_add_or_update_procedure(
     if (!procedure->name)
     {
         free(procedure);
-        tcl_error_set(error, TCL_ERROR_SYSTEM, source->span.line, source->span.column, "out of memory");
+        tcl_error_set(error, TCL_ERROR_SYSTEM, line, column, "out of memory");
         return 0;
     }
 

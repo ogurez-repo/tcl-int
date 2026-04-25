@@ -1,995 +1,16 @@
-#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "runtime/executor.h"
+#include "runtime/executor/internal.h"
+#include "runtime/variables.h"
 #include "runtime/validator.h"
-
-static int append_text(char **buffer, size_t *capacity, size_t *length, const char *text, size_t text_length)
-{
-    if (*length + text_length + 1 > *capacity)
-    {
-        size_t new_capacity = *capacity;
-
-        while (*length + text_length + 1 > new_capacity)
-        {
-            new_capacity *= 2;
-        }
-
-        char *resized = (char *)realloc(*buffer, new_capacity);
-        if (!resized)
-        {
-            return 0;
-        }
-
-        *buffer = resized;
-        *capacity = new_capacity;
-    }
-
-    memcpy(*buffer + *length, text, text_length);
-    *length += text_length;
-    (*buffer)[*length] = '\0';
-    return 1;
-}
-
-static int is_variable_name_char(char character)
-{
-    return (character >= 'a' && character <= 'z') ||
-           (character >= 'A' && character <= 'Z') ||
-           (character >= '0' && character <= '9') ||
-           character == '_';
-}
-
-static size_t scan_variable_name(const char *text, size_t length, size_t start)
-{
-    size_t index = start;
-
-    while (index < length)
-    {
-        if (is_variable_name_char(text[index]))
-        {
-            index++;
-            continue;
-        }
-
-        if (text[index] == ':')
-        {
-            size_t colon_start = index;
-            while (index < length && text[index] == ':')
-            {
-                index++;
-            }
-
-            if (index - colon_start < 2)
-            {
-                index = colon_start;
-                break;
-            }
-            continue;
-        }
-
-        break;
-    }
-
-    return index - start;
-}
-
-static int hex_digit_value(char character)
-{
-    if (character >= '0' && character <= '9')
-    {
-        return character - '0';
-    }
-
-    if (character >= 'a' && character <= 'f')
-    {
-        return character - 'a' + 10;
-    }
-
-    if (character >= 'A' && character <= 'F')
-    {
-        return character - 'A' + 10;
-    }
-
-    return -1;
-}
-
-static size_t encode_utf8(unsigned int codepoint, char output[4])
-{
-    if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF))
-    {
-        codepoint = 0xFFFD;
-    }
-
-    if (codepoint <= 0x7F)
-    {
-        output[0] = (char)codepoint;
-        return 1;
-    }
-
-    if (codepoint <= 0x7FF)
-    {
-        output[0] = (char)(0xC0 | (codepoint >> 6));
-        output[1] = (char)(0x80 | (codepoint & 0x3F));
-        return 2;
-    }
-
-    if (codepoint <= 0xFFFF)
-    {
-        output[0] = (char)(0xE0 | (codepoint >> 12));
-        output[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
-        output[2] = (char)(0x80 | (codepoint & 0x3F));
-        return 3;
-    }
-
-    output[0] = (char)(0xF0 | (codepoint >> 18));
-    output[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
-    output[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
-    output[3] = (char)(0x80 | (codepoint & 0x3F));
-    return 4;
-}
-
-static int decode_octal_escape(
-    const char *text,
-    size_t length,
-    size_t start,
-    unsigned int *codepoint,
-    size_t *digits_consumed)
-{
-    unsigned int value = 0;
-    size_t index = start;
-    size_t count = 0;
-
-    while (index < length && count < 3 && text[index] >= '0' && text[index] <= '7')
-    {
-        unsigned int digit = (unsigned int)(text[index] - '0');
-        if (value > ((0xFFU - digit) >> 3))
-        {
-            break;
-        }
-        value = (value << 3) + digit;
-        index++;
-        count++;
-    }
-
-    if (count == 0)
-    {
-        return 0;
-    }
-
-    *codepoint = value;
-    *digits_consumed = count;
-    return 1;
-}
-
-static int decode_hex_escape(
-    const char *text,
-    size_t length,
-    size_t start,
-    size_t max_digits,
-    unsigned int max_value,
-    unsigned int *codepoint,
-    size_t *digits_consumed)
-{
-    unsigned int value = 0;
-    size_t index = start;
-    size_t count = 0;
-
-    while (index < length && count < max_digits)
-    {
-        int digit = hex_digit_value(text[index]);
-        if (digit < 0)
-        {
-            break;
-        }
-
-        if (value > ((max_value - (unsigned int)digit) >> 4))
-        {
-            break;
-        }
-
-        value = (value << 4) + (unsigned int)digit;
-        index++;
-        count++;
-    }
-
-    if (count == 0)
-    {
-        return 0;
-    }
-
-    *codepoint = value;
-    *digits_consumed = count;
-    return 1;
-}
-
-static int decode_backslash_sequence(
-    const char *text,
-    size_t length,
-    size_t index,
-    char output[4],
-    size_t *output_length,
-    size_t *consumed_length)
-{
-    unsigned int codepoint = 0;
-    size_t digits = 0;
-    char next;
-
-    if (index >= length || text[index] != '\\')
-    {
-        return 0;
-    }
-
-    if (index + 1 >= length)
-    {
-        output[0] = '\\';
-        *output_length = 1;
-        *consumed_length = 1;
-        return 1;
-    }
-
-    next = text[index + 1];
-    if (next == '\n' || next == '\r')
-    {
-        size_t cursor = index + 2;
-        if (next == '\r' && cursor < length && text[cursor] == '\n')
-        {
-            cursor++;
-        }
-
-        while (cursor < length && (text[cursor] == ' ' || text[cursor] == '\t'))
-        {
-            cursor++;
-        }
-
-        output[0] = ' ';
-        *output_length = 1;
-        *consumed_length = cursor - index;
-        return 1;
-    }
-
-    switch (next)
-    {
-        case 'a':
-            codepoint = '\a';
-            break;
-        case 'b':
-            codepoint = '\b';
-            break;
-        case 'f':
-            codepoint = '\f';
-            break;
-        case 'n':
-            codepoint = '\n';
-            break;
-        case 'r':
-            codepoint = '\r';
-            break;
-        case 't':
-            codepoint = '\t';
-            break;
-        case 'v':
-            codepoint = '\v';
-            break;
-        case '\\':
-            codepoint = '\\';
-            break;
-        case 'x':
-            if (decode_hex_escape(text, length, index + 2, 2, 0xFFU, &codepoint, &digits))
-            {
-                *output_length = encode_utf8(codepoint, output);
-                *consumed_length = 2 + digits;
-                return 1;
-            }
-            output[0] = 'x';
-            *output_length = 1;
-            *consumed_length = 2;
-            return 1;
-        case 'u':
-            if (decode_hex_escape(text, length, index + 2, 4, 0xFFFFU, &codepoint, &digits))
-            {
-                *output_length = encode_utf8(codepoint, output);
-                *consumed_length = 2 + digits;
-                return 1;
-            }
-            output[0] = 'u';
-            *output_length = 1;
-            *consumed_length = 2;
-            return 1;
-        case 'U':
-            if (decode_hex_escape(text, length, index + 2, 8, 0x10FFFFU, &codepoint, &digits))
-            {
-                *output_length = encode_utf8(codepoint, output);
-                *consumed_length = 2 + digits;
-                return 1;
-            }
-            output[0] = 'U';
-            *output_length = 1;
-            *consumed_length = 2;
-            return 1;
-        default:
-            if (decode_octal_escape(text, length, index + 1, &codepoint, &digits))
-            {
-                *output_length = encode_utf8(codepoint, output);
-                *consumed_length = 1 + digits;
-                return 1;
-            }
-
-            output[0] = next;
-            *output_length = 1;
-            *consumed_length = 2;
-            return 1;
-    }
-
-    *output_length = encode_utf8(codepoint, output);
-    *consumed_length = 2;
-    return 1;
-}
-
-static int is_expand_word_type(AstWordType type)
-{
-    return type == AST_WORD_EXPAND_EMPTY ||
-           type == AST_WORD_EXPAND_STRING ||
-           type == AST_WORD_EXPAND_QUOTED ||
-           type == AST_WORD_EXPAND_BRACED ||
-           type == AST_WORD_EXPAND_VAR ||
-           type == AST_WORD_EXPAND_VAR_BRACED;
-}
-
-static AstWordType expansion_base_type(AstWordType type)
-{
-    switch (type)
-    {
-        case AST_WORD_EXPAND_STRING:
-            return AST_WORD_STRING;
-        case AST_WORD_EXPAND_QUOTED:
-            return AST_WORD_QUOTED;
-        case AST_WORD_EXPAND_BRACED:
-            return AST_WORD_BRACED;
-        case AST_WORD_EXPAND_VAR:
-            return AST_WORD_VAR;
-        case AST_WORD_EXPAND_VAR_BRACED:
-            return AST_WORD_VAR_BRACED;
-        case AST_WORD_EXPAND_EMPTY:
-        default:
-            return AST_WORD_STRING;
-    }
-}
-
-static void free_values(char **values, size_t count);
-
-static int resolve_string_text(
-    const ExecutorContext *context,
-    const char *source_text,
-    const SourceSpan *span,
-    TclError *error,
-    char **result)
-{
-    size_t source_index;
-    size_t source_length;
-    size_t capacity;
-    size_t result_length;
-    char *buffer;
-
-    source_index = 0;
-    source_length = strlen(source_text);
-    capacity = source_length + 1;
-    result_length = 0;
-
-    buffer = (char *)malloc(capacity);
-    if (!buffer)
-    {
-        tcl_error_set(error, TCL_ERROR_SYSTEM, span->line, span->column, "out of memory");
-        return 0;
-    }
-
-    buffer[0] = '\0';
-
-    while (source_index < source_length)
-    {
-        if (source_text[source_index] == '\\')
-        {
-            char replacement[4];
-            size_t replacement_length = 0;
-            size_t consumed_length = 0;
-
-            if (!decode_backslash_sequence(
-                    source_text,
-                    source_length,
-                    source_index,
-                    replacement,
-                    &replacement_length,
-                    &consumed_length))
-            {
-                free(buffer);
-                tcl_error_set(error, TCL_ERROR_SYSTEM, span->line, span->column, "failed to decode backslash sequence");
-                return 0;
-            }
-
-            if (!append_text(&buffer, &capacity, &result_length, replacement, replacement_length))
-            {
-                free(buffer);
-                tcl_error_set(error, TCL_ERROR_SYSTEM, span->line, span->column, "out of memory");
-                return 0;
-            }
-            source_index += consumed_length;
-            continue;
-        }
-
-        if (source_text[source_index] != '$')
-        {
-            if (!append_text(&buffer, &capacity, &result_length, source_text + source_index, 1))
-            {
-                free(buffer);
-                tcl_error_set(error, TCL_ERROR_SYSTEM, span->line, span->column, "out of memory");
-                return 0;
-            }
-            source_index++;
-            continue;
-        }
-
-        source_index++;
-        if (source_index >= source_length)
-        {
-            if (!append_text(&buffer, &capacity, &result_length, "$", 1))
-            {
-                free(buffer);
-                tcl_error_set(error, TCL_ERROR_SYSTEM, span->line, span->column, "out of memory");
-                return 0;
-            }
-            break;
-        }
-
-        size_t name_start;
-        size_t name_length;
-
-        if (source_text[source_index] == '{')
-        {
-            source_index++;
-            name_start = source_index;
-
-            while (source_index < source_length && source_text[source_index] != '}')
-            {
-                source_index++;
-            }
-
-            if (source_index >= source_length)
-            {
-                free(buffer);
-                tcl_error_setf(
-                    error,
-                    TCL_ERROR_SYNTAX,
-                    span->line,
-                    span->column,
-                    "unterminated braced variable reference");
-                return 0;
-            }
-
-            name_length = source_index - name_start;
-            source_index++;
-        }
-        else
-        {
-            name_start = source_index;
-            name_length = scan_variable_name(source_text, source_length, source_index);
-            source_index += name_length;
-
-            if (source_index < source_length && source_text[source_index] == '(')
-            {
-                size_t base_name_length = name_length;
-                size_t index_start;
-                size_t index_length;
-                size_t variable_name_length;
-                int depth = 1;
-                char *index_text = NULL;
-                char *resolved_index = NULL;
-                char *array_name = NULL;
-
-                source_index++;
-                index_start = source_index;
-                while (source_index < source_length)
-                {
-                    if (source_text[source_index] == '\\' && source_index + 1 < source_length)
-                    {
-                        source_index += 2;
-                        continue;
-                    }
-
-                    if (source_text[source_index] == '(')
-                    {
-                        depth++;
-                    }
-                    else if (source_text[source_index] == ')')
-                    {
-                        depth--;
-                        if (depth == 0)
-                        {
-                            break;
-                        }
-                    }
-                    source_index++;
-                }
-
-                if (depth != 0)
-                {
-                    free(buffer);
-                    tcl_error_set(
-                        error,
-                        TCL_ERROR_SYNTAX,
-                        span->line,
-                        span->column,
-                        "unterminated array variable reference");
-                    return 0;
-                }
-
-                index_length = source_index - index_start;
-                source_index++;
-
-                index_text = (char *)malloc(index_length + 1);
-                if (!index_text)
-                {
-                    free(buffer);
-                    tcl_error_set(error, TCL_ERROR_SYSTEM, span->line, span->column, "out of memory");
-                    return 0;
-                }
-
-                memcpy(index_text, source_text + index_start, index_length);
-                index_text[index_length] = '\0';
-
-                if (!resolve_string_text(context, index_text, span, error, &resolved_index))
-                {
-                    free(index_text);
-                    free(buffer);
-                    return 0;
-                }
-
-                variable_name_length = base_name_length + strlen(resolved_index) + 2;
-                array_name = (char *)malloc(variable_name_length + 1);
-                if (!array_name)
-                {
-                    free(index_text);
-                    free(resolved_index);
-                    free(buffer);
-                    tcl_error_set(error, TCL_ERROR_SYSTEM, span->line, span->column, "out of memory");
-                    return 0;
-                }
-
-                memcpy(array_name, source_text + name_start, base_name_length);
-                array_name[base_name_length] = '(';
-                memcpy(array_name + base_name_length + 1, resolved_index, strlen(resolved_index));
-                array_name[variable_name_length - 1] = ')';
-                array_name[variable_name_length] = '\0';
-
-                name_length = variable_name_length;
-
-                free(index_text);
-                free(resolved_index);
-
-                {
-                    const char *value = variables_get(context->variables, array_name);
-                    if (!value)
-                    {
-                        free(buffer);
-                        tcl_error_setf(
-                            error,
-                            TCL_ERROR_SEMANTIC,
-                            span->line,
-                            span->column,
-                            "variable '$%s' not found",
-                            array_name);
-                        free(array_name);
-                        return 0;
-                    }
-
-                    if (!append_text(&buffer, &capacity, &result_length, value, strlen(value)))
-                    {
-                        free(array_name);
-                        free(buffer);
-                        tcl_error_set(error, TCL_ERROR_SYSTEM, span->line, span->column, "out of memory");
-                        return 0;
-                    }
-                    free(array_name);
-                }
-
-                continue;
-            }
-        }
-
-        if (name_length == 0)
-        {
-            if (!append_text(&buffer, &capacity, &result_length, "$", 1))
-            {
-                free(buffer);
-                tcl_error_set(error, TCL_ERROR_SYSTEM, span->line, span->column, "out of memory");
-                return 0;
-            }
-            continue;
-        }
-
-        char *name = (char *)malloc(name_length + 1);
-        if (!name)
-        {
-            free(buffer);
-            tcl_error_set(error, TCL_ERROR_SYSTEM, span->line, span->column, "out of memory");
-            return 0;
-        }
-
-        memcpy(name, source_text + name_start, name_length);
-        name[name_length] = '\0';
-
-        const char *value = variables_get(context->variables, name);
-
-        if (!value)
-        {
-            free(buffer);
-            tcl_error_setf(
-                error,
-                TCL_ERROR_SEMANTIC,
-                span->line,
-                span->column,
-                "variable '$%s' not found",
-                name);
-            free(name);
-            return 0;
-        }
-
-        if (!append_text(&buffer, &capacity, &result_length, value, strlen(value)))
-        {
-            free(name);
-            free(buffer);
-            tcl_error_set(error, TCL_ERROR_SYSTEM, span->line, span->column, "out of memory");
-            return 0;
-        }
-
-        free(name);
-    }
-
-    *result = buffer;
-    return 1;
-}
-
-static int resolve_string_word(
-    const ExecutorContext *context,
-    const AstWord *word,
-    TclError *error,
-    char **result)
-{
-    return resolve_string_text(context, word->text, &word->span, error, result);
-}
-
-static int evaluate_word(
-    const ExecutorContext *context,
-    const AstWord *word,
-    TclError *error,
-    char **result)
-{
-    if (word->type == AST_WORD_BRACED)
-    {
-        *result = (char *)malloc(strlen(word->text) + 1);
-        if (!*result)
-        {
-            tcl_error_set(error, TCL_ERROR_SYSTEM, word->span.line, word->span.column, "out of memory");
-            return 0;
-        }
-
-        strcpy(*result, word->text);
-        return 1;
-    }
-
-    if (word->type == AST_WORD_VAR)
-    {
-        size_t length = strlen(word->text);
-        char *prefixed = (char *)malloc(length + 2);
-        int status;
-
-        if (!prefixed)
-        {
-            tcl_error_set(error, TCL_ERROR_SYSTEM, word->span.line, word->span.column, "out of memory");
-            return 0;
-        }
-
-        prefixed[0] = '$';
-        memcpy(prefixed + 1, word->text, length);
-        prefixed[length + 1] = '\0';
-
-        status = resolve_string_text(context, prefixed, &word->span, error, result);
-        free(prefixed);
-        return status;
-    }
-
-    if (word->type == AST_WORD_VAR_BRACED)
-    {
-        const char *value = variables_get(context->variables, word->text);
-        if (!value)
-        {
-            tcl_error_setf(
-                error,
-                TCL_ERROR_SEMANTIC,
-                word->span.line,
-                word->span.column,
-                "variable '$%s' not found",
-                word->text);
-            return 0;
-        }
-
-        *result = (char *)malloc(strlen(value) + 1);
-        if (!*result)
-        {
-            tcl_error_set(error, TCL_ERROR_SYSTEM, word->span.line, word->span.column, "out of memory");
-            return 0;
-        }
-
-        strcpy(*result, value);
-        return 1;
-    }
-
-    return resolve_string_word(context, word, error, result);
-}
-
-static int parse_list_braced_item(const char *text, size_t *index, size_t length, char **item)
-{
-    size_t start;
-    int depth = 1;
-
-    (*index)++;
-    start = *index;
-    while (*index < length)
-    {
-        if (text[*index] == '\\' && *index + 1 < length)
-        {
-            *index += 2;
-            continue;
-        }
-
-        if (text[*index] == '{')
-        {
-            depth++;
-        }
-        else if (text[*index] == '}')
-        {
-            depth--;
-            if (depth == 0)
-            {
-                size_t item_length = *index - start;
-                char *copy = (char *)malloc(item_length + 1);
-                if (!copy)
-                {
-                    return 0;
-                }
-                memcpy(copy, text + start, item_length);
-                copy[item_length] = '\0';
-                (*index)++;
-                *item = copy;
-                return 1;
-            }
-        }
-        (*index)++;
-    }
-
-    return 0;
-}
-
-static int parse_list_quoted_item(const char *text, size_t *index, size_t length, char **item)
-{
-    size_t write_index = 0;
-    char *buffer;
-
-    (*index)++;
-    buffer = (char *)malloc(length - *index + 1);
-    if (!buffer)
-    {
-        return 0;
-    }
-
-    while (*index < length)
-    {
-        if (text[*index] == '"')
-        {
-            (*index)++;
-            buffer[write_index] = '\0';
-            *item = buffer;
-            return 1;
-        }
-
-        if (text[*index] == '\\')
-        {
-            char replacement[4];
-            size_t replacement_length = 0;
-            size_t consumed_length = 0;
-            size_t copy_index;
-
-            if (!decode_backslash_sequence(text, length, *index, replacement, &replacement_length, &consumed_length))
-            {
-                free(buffer);
-                return 0;
-            }
-
-            for (copy_index = 0; copy_index < replacement_length; copy_index++)
-            {
-                buffer[write_index++] = replacement[copy_index];
-            }
-            *index += consumed_length;
-            continue;
-        }
-
-        buffer[write_index++] = text[*index];
-        (*index)++;
-    }
-
-    free(buffer);
-    return 0;
-}
-
-static int parse_list_unquoted_item(const char *text, size_t *index, size_t length, char **item)
-{
-    size_t write_index = 0;
-    char *buffer = (char *)malloc(length - *index + 1);
-    if (!buffer)
-    {
-        return 0;
-    }
-
-    while (*index < length && !isspace((unsigned char)text[*index]))
-    {
-        if (text[*index] == '\\')
-        {
-            char replacement[4];
-            size_t replacement_length = 0;
-            size_t consumed_length = 0;
-            size_t copy_index;
-
-            if (!decode_backslash_sequence(text, length, *index, replacement, &replacement_length, &consumed_length))
-            {
-                free(buffer);
-                return 0;
-            }
-
-            for (copy_index = 0; copy_index < replacement_length; copy_index++)
-            {
-                buffer[write_index++] = replacement[copy_index];
-            }
-            *index += consumed_length;
-            continue;
-        }
-
-        buffer[write_index++] = text[*index];
-        (*index)++;
-    }
-
-    buffer[write_index] = '\0';
-    *item = buffer;
-    return 1;
-}
-
-static int parse_list_item(const char *text, size_t *index, char **item)
-{
-    size_t length = strlen(text);
-
-    while (*index < length && isspace((unsigned char)text[*index]))
-    {
-        (*index)++;
-    }
-
-    if (*index >= length)
-    {
-        *item = NULL;
-        return 1;
-    }
-
-    if (text[*index] == '{')
-    {
-        return parse_list_braced_item(text, index, length, item);
-    }
-
-    if (text[*index] == '"')
-    {
-        return parse_list_quoted_item(text, index, length, item);
-    }
-
-    return parse_list_unquoted_item(text, index, length, item);
-}
-
-static int append_evaluated_value(char ***values, size_t *count, size_t *capacity, char *value)
-{
-    if (*count + 1 > *capacity)
-    {
-        size_t new_capacity = *capacity == 0 ? 4 : *capacity;
-        char **resized;
-
-        while (*count + 1 > new_capacity)
-        {
-            new_capacity *= 2;
-        }
-
-        resized = (char **)realloc(*values, sizeof(char *) * new_capacity);
-        if (!resized)
-        {
-            return 0;
-        }
-
-        *values = resized;
-        *capacity = new_capacity;
-    }
-
-    (*values)[(*count)++] = value;
-    return 1;
-}
-
-static int split_list_for_expansion(
-    const AstWord *word,
-    const char *list_text,
-    TclError *error,
-    char ***items,
-    size_t *item_count)
-{
-    size_t index = 0;
-    size_t capacity = 0;
-    size_t count = 0;
-    char **values = NULL;
-
-    while (1)
-    {
-        char *item = NULL;
-        if (!parse_list_item(list_text, &index, &item))
-        {
-            free_values(values, count);
-            tcl_error_set(error, TCL_ERROR_SYNTAX, word->span.line, word->span.column, "malformed list for argument expansion");
-            return 0;
-        }
-
-        if (!item)
-        {
-            break;
-        }
-
-        if (!append_evaluated_value(&values, &count, &capacity, item))
-        {
-            free(item);
-            free_values(values, count);
-            tcl_error_set(error, TCL_ERROR_SYSTEM, word->span.line, word->span.column, "out of memory");
-            return 0;
-        }
-    }
-
-    *items = values;
-    *item_count = count;
-    return 1;
-}
-
-static int evaluate_expansion_word(
-    const ExecutorContext *context,
-    const AstWord *word,
-    TclError *error,
-    char ***items,
-    size_t *item_count)
-{
-    char *value = NULL;
-    AstWord base_word;
-
-    if (word->type == AST_WORD_EXPAND_EMPTY)
-    {
-        *items = NULL;
-        *item_count = 0;
-        return 1;
-    }
-
-    base_word = *word;
-    base_word.type = expansion_base_type(word->type);
-
-    if (!evaluate_word(context, &base_word, error, &value))
-    {
-        return 0;
-    }
-
-    if (!split_list_for_expansion(word, value, error, items, item_count))
-    {
-        free(value);
-        return 0;
-    }
-
-    free(value);
-    return 1;
-}
+#include "core/errors.h"
+
+/* -------------------------------------------------------------------------- */
+/*  Lifecycle                                                                 */
+/* -------------------------------------------------------------------------- */
 
 ExecutorContext *executor_create(FILE *stdout_stream, FILE *stderr_stream)
 {
@@ -1006,9 +27,24 @@ ExecutorContext *executor_create(FILE *stdout_stream, FILE *stderr_stream)
         return NULL;
     }
 
+    context->procedures = NULL;
     context->stdout_stream = stdout_stream;
     context->stderr_stream = stderr_stream;
+    context->result = NULL;
     return context;
+}
+
+static void procedures_free(Procedure *head)
+{
+    while (head)
+    {
+        Procedure *next = head->next;
+        free(head->name);
+        free(head->args_text);
+        free(head->body_text);
+        free(head);
+        head = next;
+    }
 }
 
 void executor_destroy(ExecutorContext *context)
@@ -1018,11 +54,17 @@ void executor_destroy(ExecutorContext *context)
         return;
     }
 
+    free(context->result);
+    procedures_free(context->procedures);
     variables_destroy(context->variables);
     free(context);
 }
 
-static void free_values(char **values, size_t count)
+/* -------------------------------------------------------------------------- */
+/*  Utilities                                                                 */
+/* -------------------------------------------------------------------------- */
+
+void free_values(char **values, size_t count)
 {
     size_t index;
 
@@ -1071,120 +113,565 @@ static int collect_words(const AstCommand *command, const AstWord ***words, size
     return 1;
 }
 
-static int evaluate_words(
-    const ExecutorContext *context,
-    const AstWord *head,
-    size_t count,
-    TclError *error,
-    char ***values,
-    size_t *value_count)
-{
-    const AstWord *word;
-    char **evaluated = NULL;
-    size_t evaluated_count = 0;
-    size_t evaluated_capacity;
-    size_t index;
+/* -------------------------------------------------------------------------- */
+/*  Procedure helpers                                                         */
+/* -------------------------------------------------------------------------- */
 
-    evaluated_capacity = count == 0 ? 1 : count;
-    evaluated = (char **)calloc(evaluated_capacity, sizeof(char *));
-    if (!evaluated)
+static Procedure *procedure_find(Procedure *head, const char *name)
+{
+    while (head)
+    {
+        if (strcmp(head->name, name) == 0)
+        {
+            return head;
+        }
+        head = head->next;
+    }
+    return NULL;
+}
+
+static int split_arg_spec(const char *item, char **name, int *has_default)
+{
+    size_t index = 0;
+    char *first = NULL;
+    char *second = NULL;
+
+    if (!parse_list_item(item, &index, &first) || !first)
     {
         return 0;
     }
 
-    word = head;
-    for (index = 0; index < count; index++)
+    if (!parse_list_item(item, &index, &second))
     {
-        if (is_expand_word_type(word->type))
+        free(first);
+        return 0;
+    }
+
+    while (item[index] == ' ' || item[index] == '\t' || item[index] == '\n' || item[index] == '\r')
+    {
+        index++;
+    }
+
+    if (item[index] != '\0')
+    {
+        free(first);
+        free(second);
+        return 0;
+    }
+
+    *name = first;
+    *has_default = second != NULL;
+    free(second);
+    return 1;
+}
+
+static int count_proc_args(const char *args_text, size_t *required_count, size_t *max_count, int *variadic)
+{
+    size_t index = 0;
+    int saw_variadic = 0;
+
+    *required_count = 0;
+    *max_count = 0;
+    *variadic = 0;
+
+    while (1)
+    {
+        char *item = NULL;
+        char *name = NULL;
+        int has_default = 0;
+
+        if (!parse_list_item(args_text, &index, &item))
         {
-            char **expanded = NULL;
-            size_t expanded_count = 0;
-            size_t expanded_index;
+            free(item);
+            return 0;
+        }
 
-            if (!evaluate_expansion_word(context, word, error, &expanded, &expanded_count))
-            {
-                free_values(evaluated, evaluated_count);
-                return 0;
-            }
+        if (!item)
+        {
+            break;
+        }
 
-            for (expanded_index = 0; expanded_index < expanded_count; expanded_index++)
-            {
-                if (!append_evaluated_value(
-                        &evaluated,
-                        &evaluated_count,
-                        &evaluated_capacity,
-                        expanded[expanded_index]))
-                {
-                    free_values(expanded, expanded_count);
-                    free_values(evaluated, evaluated_count);
-                    tcl_error_set(error, TCL_ERROR_SYSTEM, word->span.line, word->span.column, "out of memory");
-                    return 0;
-                }
-            }
-            free(expanded);
+        if (!split_arg_spec(item, &name, &has_default) || name[0] == '\0' || saw_variadic)
+        {
+            free(item);
+            free(name);
+            return 0;
+        }
+
+        if (strcmp(name, "args") == 0)
+        {
+            saw_variadic = 1;
+            *variadic = 1;
         }
         else
         {
-            char *single = NULL;
-            if (!evaluate_word(context, word, error, &single))
+            if (!has_default)
             {
-                free_values(evaluated, evaluated_count);
-                return 0;
+                (*required_count)++;
             }
-
-            if (!append_evaluated_value(&evaluated, &evaluated_count, &evaluated_capacity, single))
-            {
-                free(single);
-                free_values(evaluated, evaluated_count);
-                tcl_error_set(error, TCL_ERROR_SYSTEM, word->span.line, word->span.column, "out of memory");
-                return 0;
-            }
+            (*max_count)++;
         }
 
-        word = word->next;
+        free(item);
+        free(name);
     }
 
-    *values = evaluated;
-    *value_count = evaluated_count;
     return 1;
 }
 
-static int validate_while_syntax(const AstWord **words, size_t count, TclError *error)
+static int procedure_add(
+    Procedure **head,
+    const char *name,
+    const char *args_text,
+    const char *body_text,
+    size_t required_count,
+    size_t max_count,
+    int variadic)
 {
-    if (count != 3)
+    Procedure *proc = (Procedure *)malloc(sizeof(Procedure));
+    if (!proc)
     {
-        tcl_error_set(error, TCL_ERROR_SYNTAX, words[0]->span.line, words[0]->span.column, "while expects exactly 2 arguments");
         return 0;
     }
 
+    proc->name = (char *)malloc(strlen(name) + 1);
+    proc->args_text = (char *)malloc(strlen(args_text) + 1);
+    proc->body_text = (char *)malloc(strlen(body_text) + 1);
+    if (!proc->name || !proc->args_text || !proc->body_text)
+    {
+        free(proc->name);
+        free(proc->args_text);
+        free(proc->body_text);
+        free(proc);
+        return 0;
+    }
+
+    strcpy(proc->name, name);
+    strcpy(proc->args_text, args_text);
+    strcpy(proc->body_text, body_text);
+    proc->required_count = required_count;
+    proc->max_count = max_count;
+    proc->variadic = variadic;
+    proc->next = *head;
+    *head = proc;
     return 1;
 }
 
-static int validate_for_syntax(const AstWord **words, size_t count, TclError *error)
+/* -------------------------------------------------------------------------- */
+/*  If execution                                                              */
+/* -------------------------------------------------------------------------- */
+
+static int execute_if_command(
+    ExecutorContext *context,
+    const AstWord **words,
+    size_t count,
+    TclError *error)
 {
-    if (count != 5)
+    size_t index = 1;
+
+    while (1)
     {
-        tcl_error_set(error, TCL_ERROR_SYNTAX, words[0]->span.line, words[0]->span.column, "for expects exactly 4 arguments");
-        return 0;
+        const AstWord *condition_word;
+        const AstWord *body_word;
+        char *expr_result = NULL;
+        long long cond_value;
+
+        if (index >= count)
+            return 1;
+
+        condition_word = words[index++];
+
+        if (!evaluate_expression(context, condition_word->text, condition_word->span.line, condition_word->span.column, error, &expr_result))
+            return 0;
+
+        if (!expr_to_longlong(expr_result, &cond_value))
+        {
+            free(expr_result);
+            tcl_error_set(error, TCL_ERROR_SEMANTIC, condition_word->span.line, condition_word->span.column, "expected numeric value in if condition");
+            return 0;
+        }
+        free(expr_result);
+
+        if (index < count && words[index]->type == AST_WORD_STRING && strcmp(words[index]->text, "then") == 0)
+            index++;
+
+        if (index >= count)
+        {
+            tcl_error_set(error, TCL_ERROR_SYNTAX, words[0]->span.line, words[0]->span.column, "if missing body");
+            return 0;
+        }
+
+        body_word = words[index++];
+
+        if (cond_value)
+        {
+            return execute_script_text(context, body_word->text, body_word->span.line, body_word->span.column, error);
+        }
+
+        if (index >= count)
+            return 1;
+
+        if (words[index]->type == AST_WORD_STRING && strcmp(words[index]->text, "elseif") == 0)
+        {
+            index++;
+            continue;
+        }
+
+        if (words[index]->type == AST_WORD_STRING && strcmp(words[index]->text, "else") == 0)
+        {
+            index++;
+            if (index >= count)
+            {
+                tcl_error_set(error, TCL_ERROR_SYNTAX, words[0]->span.line, words[0]->span.column, "if missing else body");
+                return 0;
+            }
+            body_word = words[index++];
+            return execute_script_text(context, body_word->text, body_word->span.line, body_word->span.column, error);
+        }
+
+        body_word = words[index++];
+        return execute_script_text(context, body_word->text, body_word->span.line, body_word->span.column, error);
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  While execution                                                           */
+/* -------------------------------------------------------------------------- */
+
+static int execute_while_command(
+    ExecutorContext *context,
+    const AstWord **words,
+    size_t count,
+    TclError *error)
+{
+    const AstWord *condition_word = words[1];
+    const AstWord *body_word = words[2];
+
+    (void)count;
+
+    while (1)
+    {
+        char *expr_result = NULL;
+        long long cond_value;
+
+        if (!evaluate_expression(context, condition_word->text, condition_word->span.line, condition_word->span.column, error, &expr_result))
+            return 0;
+
+        if (!expr_to_longlong(expr_result, &cond_value))
+        {
+            free(expr_result);
+            tcl_error_set(error, TCL_ERROR_SEMANTIC, condition_word->span.line, condition_word->span.column, "expected numeric value in while condition");
+            return 0;
+        }
+        free(expr_result);
+
+        if (!cond_value)
+            break;
+
+        if (!execute_script_text(context, body_word->text, body_word->span.line, body_word->span.column, error))
+            return 0;
     }
 
     return 1;
 }
 
-static int validate_proc_syntax(const AstWord **words, size_t count, TclError *error)
+/* -------------------------------------------------------------------------- */
+/*  For execution                                                             */
+/* -------------------------------------------------------------------------- */
+
+static int execute_for_command(
+    ExecutorContext *context,
+    const AstWord **words,
+    size_t count,
+    TclError *error)
 {
-    if (count != 4)
-    {
-        tcl_error_set(error, TCL_ERROR_SYNTAX, words[0]->span.line, words[0]->span.column, "proc expects exactly 3 arguments");
+    const AstWord *init_word = words[1];
+    const AstWord *condition_word = words[2];
+    const AstWord *next_word = words[3];
+    const AstWord *body_word = words[4];
+
+    (void)count;
+
+    if (!execute_script_text(context, init_word->text, init_word->span.line, init_word->span.column, error))
         return 0;
+
+    while (1)
+    {
+        char *expr_result = NULL;
+        long long cond_value;
+
+        if (!evaluate_expression(context, condition_word->text, condition_word->span.line, condition_word->span.column, error, &expr_result))
+            return 0;
+
+        if (!expr_to_longlong(expr_result, &cond_value))
+        {
+            free(expr_result);
+            tcl_error_set(error, TCL_ERROR_SEMANTIC, condition_word->span.line, condition_word->span.column, "expected numeric value in for condition");
+            return 0;
+        }
+        free(expr_result);
+
+        if (!cond_value)
+            break;
+
+        if (!execute_script_text(context, body_word->text, body_word->span.line, body_word->span.column, error))
+            return 0;
+
+        if (!execute_script_text(context, next_word->text, next_word->span.line, next_word->span.column, error))
+            return 0;
     }
 
     return 1;
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Proc execution                                                            */
+/* -------------------------------------------------------------------------- */
+
+static int execute_proc_command(
+    ExecutorContext *context,
+    const AstWord **words,
+    size_t count,
+    TclError *error)
+{
+    char *name = NULL;
+    char *args_text = NULL;
+    char *body_text = NULL;
+    Procedure *existing;
+    size_t required_count;
+    size_t max_count;
+    int variadic;
+
+    (void)count;
+
+    if (!evaluate_word(context, words[1], error, &name))
+        return 0;
+    if (!evaluate_word(context, words[2], error, &args_text))
+    {
+        free(name);
+        return 0;
+    }
+    if (!evaluate_word(context, words[3], error, &body_text))
+    {
+        free(name);
+        free(args_text);
+        return 0;
+    }
+
+    if (!count_proc_args(args_text, &required_count, &max_count, &variadic))
+    {
+        free(name);
+        free(args_text);
+        free(body_text);
+        tcl_error_set(error, TCL_ERROR_SYNTAX, words[2]->span.line, words[2]->span.column, "invalid proc argument list");
+        return 0;
+    }
+
+    existing = procedure_find(context->procedures, name);
+    if (existing)
+    {
+        free(existing->args_text);
+        free(existing->body_text);
+        existing->args_text = args_text;
+        existing->body_text = body_text;
+        existing->required_count = required_count;
+        existing->max_count = max_count;
+        existing->variadic = variadic;
+    }
+    else
+    {
+        if (!procedure_add(&context->procedures, name, args_text, body_text, required_count, max_count, variadic))
+        {
+            free(name);
+            free(args_text);
+            free(body_text);
+            tcl_error_set(error, TCL_ERROR_SYSTEM, words[0]->span.line, words[0]->span.column, "out of memory");
+            return 0;
+        }
+        free(args_text);
+        free(body_text);
+    }
+
+    free(name);
+    return 1;
+}
+
+static int execute_procedure_call(
+    ExecutorContext *context,
+    Procedure *proc,
+    char **arg_values,
+    size_t arg_count,
+    int line,
+    int column,
+    TclError *error)
+{
+    Variables *old_vars = context->variables;
+    Variables *local_vars = variables_create();
+    size_t args_index = 0;
+    size_t arg_values_index = 0;
+    int success = 1;
+    char *variadic_list = NULL;
+    size_t variadic_capacity = 0;
+    size_t variadic_len = 0;
+
+    if (!local_vars)
+    {
+        tcl_error_set(error, TCL_ERROR_SYSTEM, line, column, "out of memory");
+        return 0;
+    }
+
+    context->variables = local_vars;
+
+    while (1)
+    {
+        char *arg_item = NULL;
+        char *param_name = NULL;
+        char *default_value = NULL;
+        int has_default = 0;
+        int is_args = 0;
+        size_t inner_index;
+        char *inner_first = NULL;
+        char *inner_second = NULL;
+
+        if (!parse_list_item(proc->args_text, &args_index, &arg_item))
+        {
+            success = 0;
+            tcl_error_set(error, TCL_ERROR_SEMANTIC, line, column, "invalid proc argument list");
+            break;
+        }
+        if (!arg_item)
+            break;
+
+        /* Try to parse arg_item as a list of two items: {name default} */
+        inner_index = 0;
+        if (parse_list_item(arg_item, &inner_index, &inner_first) && inner_first)
+        {
+            if (parse_list_item(arg_item, &inner_index, &inner_second) && inner_second)
+            {
+                param_name = inner_first;
+                default_value = inner_second;
+                has_default = 1;
+            }
+            else
+            {
+                param_name = inner_first;
+            }
+        }
+        else
+        {
+            param_name = (char *)malloc(strlen(arg_item) + 1);
+            if (param_name)
+                strcpy(param_name, arg_item);
+        }
+
+        if (!param_name)
+        {
+            free(arg_item);
+            free(inner_first);
+            free(inner_second);
+            success = 0;
+            tcl_error_set(error, TCL_ERROR_SYSTEM, line, column, "out of memory");
+            break;
+        }
+
+        if (strcmp(param_name, "args") == 0)
+        {
+            is_args = 1;
+        }
+
+        if (is_args)
+        {
+            /* Build a Tcl list from remaining arguments */
+            size_t i;
+            variadic_list = (char *)malloc(1);
+            if (variadic_list)
+            {
+                variadic_list[0] = '\0';
+                variadic_len = 0;
+                variadic_capacity = 1;
+            }
+
+            for (i = arg_values_index; i < arg_count; i++)
+            {
+                size_t val_len = strlen(arg_values[i]);
+                size_t need = variadic_len + val_len + 3;
+                if (need > variadic_capacity)
+                {
+                    char *tmp = (char *)realloc(variadic_list, need);
+                    if (!tmp)
+                    {
+                        free(variadic_list);
+                        variadic_list = NULL;
+                        break;
+                    }
+                    variadic_list = tmp;
+                    variadic_capacity = need;
+                }
+                if (variadic_len > 0)
+                {
+                    variadic_list[variadic_len++] = ' ';
+                }
+                memcpy(variadic_list + variadic_len, arg_values[i], val_len);
+                variadic_len += val_len;
+                variadic_list[variadic_len] = '\0';
+            }
+
+            if (!variadic_list)
+            {
+                free(param_name);
+                free(arg_item);
+                if (has_default)
+                    free(default_value);
+                success = 0;
+                tcl_error_set(error, TCL_ERROR_SYSTEM, line, column, "out of memory");
+                break;
+            }
+
+            variables_set(local_vars, param_name, variadic_list);
+            free(variadic_list);
+        }
+        else if (arg_values_index < arg_count)
+        {
+            variables_set(local_vars, param_name, arg_values[arg_values_index]);
+            arg_values_index++;
+        }
+        else if (has_default)
+        {
+            variables_set(local_vars, param_name, default_value);
+        }
+        else
+        {
+            free(param_name);
+            free(arg_item);
+            if (has_default)
+                free(default_value);
+            success = 0;
+            tcl_error_set(error, TCL_ERROR_SEMANTIC, line, column, "procedure expects more arguments");
+            break;
+        }
+
+        free(param_name);
+        free(arg_item);
+        if (has_default)
+            free(default_value);
+    }
+
+    if (success)
+    {
+        success = execute_script_text(context, proc->body_text, line, column, error);
+    }
+
+    context->variables = old_vars;
+    variables_destroy(local_vars);
+    return success;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Command dispatcher                                                        */
+/* -------------------------------------------------------------------------- */
 
 static int execute_command(
     ExecutorContext *context,
-    ValidatorContext *validator,
     const AstCommand *command,
     TclError *error)
 {
@@ -1207,7 +694,12 @@ static int execute_command(
         return 1;
     }
 
-    if (is_expand_word_type(words[0]->type))
+    if (words[0]->type == AST_WORD_EXPAND_EMPTY ||
+        words[0]->type == AST_WORD_EXPAND_STRING ||
+        words[0]->type == AST_WORD_EXPAND_QUOTED ||
+        words[0]->type == AST_WORD_EXPAND_BRACED ||
+        words[0]->type == AST_WORD_EXPAND_VAR ||
+        words[0]->type == AST_WORD_EXPAND_VAR_BRACED)
     {
         char **expanded = NULL;
         size_t expanded_count = 0;
@@ -1269,6 +761,23 @@ static int execute_command(
                 tcl_error_set(error, TCL_ERROR_SYSTEM, command->span.line, command->span.column, "failed to set variable");
                 goto cleanup;
             }
+        }
+        else
+        {
+            const char *value = variables_get(context->variables, values[1]);
+            if (!value)
+            {
+                tcl_error_setf(error, TCL_ERROR_SEMANTIC, command->span.line, command->span.column, "variable '%s' not found", values[1]);
+                goto cleanup;
+            }
+            free(context->result);
+            context->result = (char *)malloc(strlen(value) + 1);
+            if (!context->result)
+            {
+                tcl_error_set(error, TCL_ERROR_SYSTEM, command->span.line, command->span.column, "out of memory");
+                goto cleanup;
+            }
+            strcpy(context->result, value);
         }
 
         success = 1;
@@ -1335,34 +844,93 @@ static int execute_command(
 
     if (strcmp(command_name, "if") == 0)
     {
-        success = validator_validate_if_words(validator, words, (int)count, error);
+        success = execute_if_command(context, words, count, error);
         goto cleanup;
     }
 
     if (strcmp(command_name, "while") == 0)
     {
-        success = validate_while_syntax(words, count, error);
+        success = execute_while_command(context, words, count, error);
         goto cleanup;
     }
 
     if (strcmp(command_name, "for") == 0)
     {
-        success = validate_for_syntax(words, count, error);
+        success = execute_for_command(context, words, count, error);
         goto cleanup;
     }
 
     if (strcmp(command_name, "proc") == 0)
     {
-        success = validate_proc_syntax(words, count, error);
+        success = execute_proc_command(context, words, count, error);
         goto cleanup;
     }
 
-    if (strcmp(command_name, "expr") == 0 ||
-        strcmp(command_name, "incr") == 0 ||
+    if (strcmp(command_name, "expr") == 0)
+    {
+        size_t arg_index;
+        size_t total_length = 0;
+        char *expr_text;
+        size_t pos;
+        char *expr_result;
+
+        if (!evaluate_words(context, command->words, count, error, &values, &value_count))
+        {
+            goto cleanup;
+        }
+
+        if (value_count < 2)
+        {
+            tcl_error_set(error, TCL_ERROR_SYNTAX, command->span.line, command->span.column, "expr expects at least 1 argument");
+            goto cleanup;
+        }
+
+        for (arg_index = 1; arg_index < value_count; arg_index++)
+        {
+            total_length += strlen(values[arg_index]);
+            if (arg_index < value_count - 1)
+            {
+                total_length += 1;
+            }
+        }
+
+        expr_text = (char *)malloc(total_length + 1);
+        if (!expr_text)
+        {
+            tcl_error_set(error, TCL_ERROR_SYSTEM, command->span.line, command->span.column, "out of memory");
+            goto cleanup;
+        }
+
+        pos = 0;
+        for (arg_index = 1; arg_index < value_count; arg_index++)
+        {
+            size_t len = strlen(values[arg_index]);
+            memcpy(expr_text + pos, values[arg_index], len);
+            pos += len;
+            if (arg_index < value_count - 1)
+            {
+                expr_text[pos++] = ' ';
+            }
+        }
+        expr_text[pos] = '\0';
+
+        if (!evaluate_expression(context, expr_text, command->span.line, command->span.column, error, &expr_result))
+        {
+            free(expr_text);
+            goto cleanup;
+        }
+        free(expr_text);
+
+        free(context->result);
+        context->result = expr_result;
+        success = 1;
+        goto cleanup;
+    }
+
+    if (strcmp(command_name, "incr") == 0 ||
         strcmp(command_name, "list") == 0 ||
         strcmp(command_name, "foreach") == 0 ||
         strcmp(command_name, "switch") == 0 ||
-        strcmp(command_name, "return") == 0 ||
         strcmp(command_name, "break") == 0 ||
         strcmp(command_name, "continue") == 0 ||
         strcmp(command_name, "catch") == 0)
@@ -1371,10 +939,48 @@ static int execute_command(
         goto cleanup;
     }
 
-    if (validator_has_procedure(validator, command_name))
+    if (strcmp(command_name, "return") == 0)
     {
+        const char *return_value = "";
+
+        if (!evaluate_words(context, command->words, count, error, &values, &value_count))
+        {
+            goto cleanup;
+        }
+
+        if (value_count == 2)
+        {
+            return_value = values[1];
+        }
+        else if (value_count > 2)
+        {
+            return_value = values[value_count - 1];
+        }
+
+        free(context->result);
+        context->result = (char *)malloc(strlen(return_value) + 1);
+        if (!context->result)
+        {
+            tcl_error_set(error, TCL_ERROR_SYSTEM, command->span.line, command->span.column, "out of memory");
+            goto cleanup;
+        }
+        strcpy(context->result, return_value);
+
         success = 1;
         goto cleanup;
+    }
+
+    {
+        Procedure *proc = procedure_find(context->procedures, command_name);
+        if (proc)
+        {
+            if (!evaluate_words(context, command->words, count, error, &values, &value_count))
+            {
+                goto cleanup;
+            }
+            success = execute_procedure_call(context, proc, values + 1, value_count - 1, command->span.line, command->span.column, error);
+            goto cleanup;
+        }
     }
 
     tcl_error_setf(
@@ -1392,6 +998,37 @@ cleanup:
     return success;
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Top-level executor                                                        */
+/* -------------------------------------------------------------------------- */
+
+static int seed_validator_with_runtime_procedures(
+    ValidatorContext *validator,
+    const Procedure *procedures,
+    TclError *error)
+{
+    const Procedure *procedure = procedures;
+
+    while (procedure)
+    {
+        if (!validator_declare_procedure(
+                validator,
+                procedure->name,
+                procedure->required_count,
+                procedure->max_count,
+                procedure->variadic,
+                error,
+                1,
+                1))
+        {
+            return 0;
+        }
+        procedure = procedure->next;
+    }
+
+    return 1;
+}
+
 int executor_execute(ExecutorContext *context, const AstCommand *program, TclError *error)
 {
     const AstCommand *command = program;
@@ -1403,6 +1040,12 @@ int executor_execute(ExecutorContext *context, const AstCommand *program, TclErr
         return 0;
     }
 
+    if (!seed_validator_with_runtime_procedures(validator, context->procedures, error))
+    {
+        validator_destroy(validator);
+        return 0;
+    }
+
     if (!validator_validate_program(validator, program, error))
     {
         validator_destroy(validator);
@@ -1411,7 +1054,7 @@ int executor_execute(ExecutorContext *context, const AstCommand *program, TclErr
 
     while (command)
     {
-        if (!execute_command(context, validator, command, error))
+        if (!execute_command(context, command, error))
         {
             validator_destroy(validator);
             return 0;

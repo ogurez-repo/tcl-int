@@ -103,14 +103,15 @@ def test_multiline_braced_word_is_literal(tcl: Tcl):
     assert result.stdout.strip() == "hello\nworld"
 
 
-def test_if_syntax_is_accepted_without_execution(tcl: Tcl):
+def test_if_executes_correct_branch(tcl: Tcl):
+    tcl.set("x", "5")
     tcl.command("if {$x > 0} {put pos} elseif {$x < 0} then {put neg} else {put zero}")
 
     result = tcl.run()
 
     assert result.returncode == 0
     assert result.stderr == ""
-    assert result.stdout == ""
+    assert result.stdout.strip() == "pos"
 
 
 def test_if_missing_body_is_syntax_error(tcl: Tcl):
@@ -139,7 +140,7 @@ def test_if_implicit_else_is_accepted(tcl: Tcl):
 
     assert result.returncode == 0
     assert result.stderr == ""
-    assert result.stdout == ""
+    assert result.stdout.strip() == "a"
 
 
 def test_proc_recursive_with_implicit_else_is_accepted(tcl: Tcl):
@@ -152,18 +153,19 @@ def test_proc_recursive_with_implicit_else_is_accepted(tcl: Tcl):
     assert result.stderr == ""
 
 
-def test_while_syntax_is_accepted_without_execution(tcl: Tcl):
-    tcl.command("while {$x < 10} {put $x}")
+def test_while_executes_loop(tcl: Tcl):
+    tcl.command("set x 0")
+    tcl.command("while {$x < 3} {put $x; set x [expr {$x + 1}]}")
 
     result = tcl.run()
 
     assert result.returncode == 0
     assert result.stderr == ""
-    assert result.stdout == ""
+    assert result.stdout.strip() == "0\n1\n2"
 
 
-def test_while_with_unary_bitwise_not_expr_is_accepted(tcl: Tcl):
-    tcl.command("while {~1} {put x}")
+def test_while_executes_zero_iterations(tcl: Tcl):
+    tcl.command("while {0} {put x}")
 
     result = tcl.run()
 
@@ -181,14 +183,260 @@ def test_while_argument_error_is_syntax_error(tcl: Tcl):
     assert result.stderr == "syntax error at 1:1: while expects exactly 2 arguments\n"
 
 
-def test_for_syntax_is_accepted_without_execution(tcl: Tcl):
+def test_while_single_iteration(tcl: Tcl):
+    tcl.command("set x 0")
+    tcl.command("while {$x < 1} {put $x; set x [expr {$x + 1}]}")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "0"
+
+
+def test_while_with_command_substitution_in_condition(tcl: Tcl):
+    tcl.command("set x 0")
+    tcl.command("while {[expr {$x < 3}]} {put $x; set x [expr {$x + 1}]}")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "0\n1\n2"
+
+
+def test_while_with_undefined_variable_in_condition(tcl: Tcl):
+    tcl.command("while {$x < 3} {put x}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "variable '$x' not found" in result.stderr
+
+
+def test_while_error_in_body_stops_execution(tcl: Tcl):
+    tcl.command("set x 0")
+    tcl.command("while {$x < 3} {put $x; set x [expr {$x + 1}]; put $y}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "variable '$y' not found" in result.stderr
+    assert result.stdout.strip() == "0"
+
+
+def test_while_nested_loops(tcl: Tcl):
+    tcl.command("set x 0")
+    tcl.command("set y 0")
+    tcl.command(
+        'while {$x < 2} { while {$y < 2} { put "$x $y"; set y [expr {$y + 1}] }; set x [expr {$x + 1}]; set y 0 }'
+    )
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "0 0\n0 1\n1 0\n1 1"
+
+
+def test_while_with_eq_condition(tcl: Tcl):
+    tcl.command("set x a")
+    tcl.command('while {$x eq "a"} { put ok; set x b }')
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "ok"
+
+
+def test_while_boolean_truthy_condition(tcl: Tcl):
+    tcl.command("set x 1")
+    tcl.command("while {$x} { put ok; set x 0 }")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "ok"
+
+
+def test_while_with_semicolon_separated_body(tcl: Tcl):
+    tcl.command("set x 0")
+    tcl.command("while {$x < 3} {put $x; set x [expr {$x + 1}]; put done}")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    lines = result.stdout.strip().split("\n")
+    # Each iteration prints the number then "done"
+    assert lines == ["0", "done", "1", "done", "2", "done"]
+
+
+def test_for_executes_loop(tcl: Tcl):
     tcl.command("for {set i 0} {$i < 10} {set i [expr {$i + 1}]} {put $i}")
 
     result = tcl.run()
 
     assert result.returncode == 0
     assert result.stderr == ""
+    assert result.stdout.strip() == "\n".join(str(i) for i in range(10))
+
+
+def test_for_zero_iterations(tcl: Tcl):
+    tcl.command("for {set i 0} {$i < 0} {set i [expr {$i + 1}]} {put $i}")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
     assert result.stdout == ""
+
+
+def test_for_empty_init_and_next(tcl: Tcl):
+    tcl.command("for {} {0} {} {put never}")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == ""
+
+
+def test_for_error_in_init(tcl: Tcl):
+    tcl.command("for {set i $x} {$i < 3} {set i [expr {$i + 1}]} {put $i}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "variable '$x' not found" in result.stderr
+
+
+def test_for_error_in_condition(tcl: Tcl):
+    tcl.command("for {set i 0} {$i < $x} {set i [expr {$i + 1}]} {put $i}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "variable '$x' not found" in result.stderr
+
+
+def test_for_error_in_body(tcl: Tcl):
+    tcl.command("for {set i 0} {$i < 3} {set i [expr {$i + 1}]} {put $i; put $y}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "variable '$y' not found" in result.stderr
+    assert result.stdout.strip() == "0"
+
+
+def test_for_error_in_next(tcl: Tcl):
+    tcl.command("for {set i 0} {$i < 3} {set i [expr {$i + 1}]; put $y} {put $i}")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "variable '$y' not found" in result.stderr
+    assert result.stdout.strip() == "0"
+
+
+def test_for_nested_loops(tcl: Tcl):
+    tcl.command(
+        'for {set i 0} {$i < 2} {set i [expr {$i + 1}]} { '
+        'for {set j 0} {$j < 2} {set j [expr {$j + 1}]} { put "$i $j" } '
+        '}'
+    )
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "0 0\n0 1\n1 0\n1 1"
+
+
+def test_for_with_if_and_expr(tcl: Tcl):
+    tcl.command(
+        'for {set i 0} {$i < 3} {set i [expr {$i + 1}]} { '
+        'if {$i % 2 == 0} { put "even $i" } else { put "odd $i" } '
+        '}'
+    )
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "even 0\nodd 1\neven 2"
+
+
+def test_for_with_expr_accumulator(tcl: Tcl):
+    tcl.command("set sum 0")
+    tcl.command("for {set i 1} {$i <= 5} {set i [expr {$i + 1}]} { set sum [expr {$sum + $i}] }")
+    tcl.command("put $sum")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "15"
+
+
+def test_while_with_for_nested(tcl: Tcl):
+    tcl.command("set x 0")
+    tcl.command(
+        'while {$x < 3} { '
+        'for {set y 0} {$y < 2} {set y [expr {$y + 1}]} { put "$x $y" }; '
+        'set x [expr {$x + 1}] '
+        '}'
+    )
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "0 0\n0 1\n1 0\n1 1\n2 0\n2 1"
+
+
+def test_for_with_ternary_expr(tcl: Tcl):
+    tcl.command(
+        'for {set i 0} {$i < 8} {set i [expr {$i + 1}]} { '
+        'put [expr {$i & 1 ? "odd" : "even"}] '
+        '}'
+    )
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "\n".join(
+        ["even", "odd", "even", "odd", "even", "odd", "even", "odd"]
+    )
+
+
+def test_while_with_logical_expr(tcl: Tcl):
+    tcl.command("set x 5")
+    tcl.command("while {$x > 0 && $x % 2 == 1} { put $x; set x [expr {$x - 2}] }")
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "5\n3\n1"
+
+
+def test_for_with_while_and_command_substitution(tcl: Tcl):
+    tcl.command(
+        'for {set i 0} {$i < 3} {set i [expr {$i + 1}]} { '
+        'while {[expr {$i * 2}] < 4} { put "$i ok"; set i [expr {$i + 1}] } '
+        '}'
+    )
+
+    result = tcl.run()
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.strip() == "0 ok\n1 ok"
 
 
 def test_for_argument_error_is_syntax_error(tcl: Tcl):
@@ -326,12 +574,22 @@ def test_missing_variable_is_semantic_error(tcl: Tcl):
 
 
 def test_set_read_variable_is_valid(tcl: Tcl):
+    tcl.command("set a 42")
     tcl.command("set a")
 
     result = tcl.run()
 
     assert result.returncode == 0
     assert result.stderr == ""
+
+
+def test_set_read_undefined_variable_is_error(tcl: Tcl):
+    tcl.command("set a")
+
+    result = tcl.run()
+
+    assert result.returncode != 0
+    assert "variable 'a' not found" in result.stderr
 
 
 def test_set_argument_error_is_syntax_error(tcl: Tcl):
@@ -433,13 +691,14 @@ def test_proc_body_is_validated(tcl: Tcl):
 
 
 def test_nested_control_flow_is_valid(tcl: Tcl):
-    tcl.command("if {$x > 0} {while {$x < 10} {put $x}}")
+    tcl.set("x", "5")
+    tcl.command("if {$x > 0} {while {$x < 10} {put $x\nset x [expr {$x + 1}]}}")
 
     result = tcl.run()
 
     assert result.returncode == 0
     assert result.stderr == ""
-    assert result.stdout == ""
+    assert result.stdout == "5\n6\n7\n8\n9\n"
 
 
 def test_proc_call_with_correct_arity_is_valid(tcl: Tcl):

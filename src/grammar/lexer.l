@@ -277,7 +277,7 @@ static int scanner_next_char_no_refill(void)
 
     if (*(yy_c_buf_p) == YY_END_OF_BUFFER_CHAR)
     {
-        if ((yy_c_buf_p) < &YY_CURRENT_BUFFER_LVALUE->yy_ch_buf[(yy_n_chars)])
+        if ((yy_c_buf_p) < &YY_CURRENT_BUFFER->yy_ch_buf[(yy_n_chars)])
         {
             *(yy_c_buf_p) = '\0';
         }

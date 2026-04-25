@@ -7,11 +7,24 @@
 #include "core/errors.h"
 #include "runtime/variables.h"
 
+typedef struct Procedure
+{
+    char *name;
+    char *args_text;
+    char *body_text;
+    size_t required_count;
+    size_t max_count;
+    int variadic;
+    struct Procedure *next;
+} Procedure;
+
 typedef struct ExecutorContext
 {
     Variables *variables;
+    Procedure *procedures;
     FILE *stdout_stream;
     FILE *stderr_stream;
+    char *result;
 } ExecutorContext;
 
 /* Returns a heap-allocated context that must be destroyed with executor_destroy. */
