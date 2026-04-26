@@ -215,5 +215,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 bin
-examples
 AGENTS.md
+
+.DS_Store

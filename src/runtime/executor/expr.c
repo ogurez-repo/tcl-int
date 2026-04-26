@@ -1,8 +1,7 @@
 #include <ctype.h>
-#include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
 #include "core/errors.h"
 #include "runtime/executor.h"
@@ -65,12 +64,7 @@ int expr_to_longlong(const char *str, long long *out)
     }
 
     *out = strtoll(str, &endptr, 10);
-    if (*endptr != '\0')
-    {
-        return 0;
-    }
-
-    return 1;
+    return *endptr == '\0';
 }
 
 static void expr_skip_ws(ExprEval *eval)
@@ -124,8 +118,6 @@ static int expr_match_text(ExprEval *eval, const char *text)
     return 1;
 }
 
-static int expr_parse_expression(ExprEval *eval, long long *out);
-
 static int parse_integer_string(ExprEval *eval, const char *value, long long *out)
 {
     if (!expr_to_longlong(value, out))
@@ -138,18 +130,18 @@ static int parse_integer_string(ExprEval *eval, const char *value, long long *ou
     return 1;
 }
 
-static int validate_var_name(ExprEval *eval, const char *name)
+static int validate_var_name_text(ExprEval *eval, const char *name, size_t length)
 {
-    size_t index;
+    size_t i;
 
-    if (!name || name[0] == '\0' || !is_var_start_char(name[0]))
+    if (length == 0 || !is_var_start_char(name[0]))
     {
         return expr_error(eval, "invalid variable reference");
     }
 
-    for (index = 1; name[index]; index++)
+    for (i = 1; i < length; i++)
     {
-        if (!is_var_char(name[index]))
+        if (!is_var_char(name[i]))
         {
             return expr_semantic_error(eval, "array/namespace variables are not supported");
         }
@@ -158,11 +150,10 @@ static int validate_var_name(ExprEval *eval, const char *name)
     return 1;
 }
 
-static int expr_parse_variable(ExprEval *eval, long long *out)
-{
-    char *name;
-    const char *value;
+static int expr_parse_expression(ExprEval *eval, long long *out, int evaluate);
 
+static int expr_parse_variable(ExprEval *eval, long long *out, int evaluate)
+{
     eval->index++;
 
     if (eval->index >= eval->length)
@@ -173,7 +164,7 @@ static int expr_parse_variable(ExprEval *eval, long long *out)
     if (eval->text[eval->index] == '{')
     {
         size_t start;
-        size_t len;
+        size_t length;
 
         eval->index++;
         start = eval->index;
@@ -187,73 +178,110 @@ static int expr_parse_variable(ExprEval *eval, long long *out)
             return expr_error(eval, "unterminated variable reference");
         }
 
-        len = eval->index - start;
-        name = (char *)malloc(len + 1);
-        if (!name)
+        length = eval->index - start;
+        if (!validate_var_name_text(eval, eval->text + start, length))
         {
-            return expr_semantic_error(eval, "out of memory");
+            return 0;
         }
 
-        memcpy(name, eval->text + start, len);
-        name[len] = '\0';
+        if (evaluate)
+        {
+            char *name = (char *)malloc(length + 1);
+            const char *value;
+
+            if (!name)
+            {
+                return expr_semantic_error(eval, "out of memory");
+            }
+
+            memcpy(name, eval->text + start, length);
+            name[length] = '\0';
+            value = variables_get(eval->context->variables, name);
+            if (!value)
+            {
+                tcl_error_setf(eval->error, TCL_ERROR_SEMANTIC, eval->line, eval->column, "Undefined variable: %s", name);
+                free(name);
+                return 0;
+            }
+
+            if (!parse_integer_string(eval, value, out))
+            {
+                free(name);
+                return 0;
+            }
+
+            free(name);
+        }
+        else
+        {
+            *out = 0;
+        }
+
         eval->index++;
+        return 1;
     }
     else
     {
         size_t start = eval->index;
-        size_t len = scan_variable_name(eval->text, eval->length, eval->index);
+        size_t length = scan_variable_name(eval->text, eval->length, eval->index);
 
-        if (len == 0)
+        if (length == 0)
         {
             return expr_error(eval, "invalid variable reference");
         }
 
-        eval->index += len;
+        eval->index += length;
         if (eval->index < eval->length && eval->text[eval->index] == '(')
         {
             return expr_semantic_error(eval, "array/namespace variables are not supported");
         }
 
-        name = (char *)malloc(len + 1);
-        if (!name)
+        if (!validate_var_name_text(eval, eval->text + start, length))
         {
-            return expr_semantic_error(eval, "out of memory");
+            return 0;
         }
 
-        memcpy(name, eval->text + start, len);
-        name[len] = '\0';
-    }
+        if (evaluate)
+        {
+            char *name = (char *)malloc(length + 1);
+            const char *value;
 
-    if (!validate_var_name(eval, name))
-    {
-        free(name);
-        return 0;
-    }
+            if (!name)
+            {
+                return expr_semantic_error(eval, "out of memory");
+            }
 
-    value = variables_get(eval->context->variables, name);
-    if (!value)
-    {
-        tcl_error_setf(eval->error, TCL_ERROR_SEMANTIC, eval->line, eval->column, "Undefined variable: %s", name);
-        free(name);
-        return 0;
-    }
+            memcpy(name, eval->text + start, length);
+            name[length] = '\0';
+            value = variables_get(eval->context->variables, name);
+            if (!value)
+            {
+                tcl_error_setf(eval->error, TCL_ERROR_SEMANTIC, eval->line, eval->column, "Undefined variable: %s", name);
+                free(name);
+                return 0;
+            }
 
-    if (!parse_integer_string(eval, value, out))
-    {
-        free(name);
-        return 0;
-    }
+            if (!parse_integer_string(eval, value, out))
+            {
+                free(name);
+                return 0;
+            }
 
-    free(name);
-    return 1;
+            free(name);
+        }
+        else
+        {
+            *out = 0;
+        }
+
+        return 1;
+    }
 }
 
-static int expr_parse_number(ExprEval *eval, long long *out)
+static int expr_parse_number(ExprEval *eval, long long *out, int evaluate)
 {
     size_t start;
     size_t len;
-    char *number;
-    int ok;
 
     expr_skip_ws(eval);
     start = eval->index;
@@ -268,58 +296,77 @@ static int expr_parse_number(ExprEval *eval, long long *out)
         return 0;
     }
 
-    len = eval->index - start;
-    number = (char *)malloc(len + 1);
-    if (!number)
+    if (!evaluate)
     {
-        return expr_semantic_error(eval, "out of memory");
+        *out = 0;
+        return 1;
     }
 
-    memcpy(number, eval->text + start, len);
-    number[len] = '\0';
+    len = eval->index - start;
+    {
+        char *number = (char *)malloc(len + 1);
+        int ok;
 
-    ok = parse_integer_string(eval, number, out);
-    free(number);
-    return ok;
+        if (!number)
+        {
+            return expr_semantic_error(eval, "out of memory");
+        }
+
+        memcpy(number, eval->text + start, len);
+        number[len] = '\0';
+        ok = parse_integer_string(eval, number, out);
+        free(number);
+        return ok;
+    }
 }
 
-static int expr_parse_command_substitution(ExprEval *eval, long long *out)
+static int expr_parse_command_substitution(ExprEval *eval, long long *out, int evaluate)
 {
     size_t end;
-    char *text_result = NULL;
 
     if (!validator_find_matching_bracket(eval->text, eval->index, &end))
     {
         return expr_error(eval, "unterminated command substitution");
     }
 
-    if (!execute_command_substitution(
-            eval->context,
-            eval->text,
-            eval->length,
-            eval->index,
-            eval->line,
-            eval->column,
-            &end,
-            eval->error,
-            &text_result))
+    if (!evaluate)
     {
-        return 0;
+        eval->index = end + 1;
+        *out = 0;
+        return 1;
     }
 
-    eval->index = end + 1;
-
-    if (!parse_integer_string(eval, text_result, out))
     {
+        char *text_result = NULL;
+
+        if (!execute_command_substitution(
+                eval->context,
+                eval->text,
+                eval->length,
+                eval->index,
+                eval->line,
+                eval->column,
+                &end,
+                eval->error,
+                &text_result))
+        {
+            return 0;
+        }
+
+        eval->index = end + 1;
+
+        if (!parse_integer_string(eval, text_result, out))
+        {
+            free(text_result);
+            return 0;
+        }
+
         free(text_result);
-        return 0;
+        return 1;
     }
-
-    free(text_result);
-    return 1;
 }
 
-static int expr_parse_primary(ExprEval *eval, long long *out)
+static int expr_parse_primary(ExprEval *eval, long long *out, int evaluate)
 {
     expr_skip_ws(eval);
 
@@ -328,24 +375,24 @@ static int expr_parse_primary(ExprEval *eval, long long *out)
         return expr_error(eval, "invalid expression");
     }
 
-    if (expr_parse_number(eval, out))
+    if (expr_parse_number(eval, out, evaluate))
     {
         return 1;
     }
 
     if (eval->text[eval->index] == '$')
     {
-        return expr_parse_variable(eval, out);
+        return expr_parse_variable(eval, out, evaluate);
     }
 
     if (eval->text[eval->index] == '[')
     {
-        return expr_parse_command_substitution(eval, out);
+        return expr_parse_command_substitution(eval, out, evaluate);
     }
 
     if (expr_match_char(eval, '('))
     {
-        if (!expr_parse_expression(eval, out))
+        if (!expr_parse_expression(eval, out, evaluate))
         {
             return 0;
         }
@@ -361,41 +408,59 @@ static int expr_parse_primary(ExprEval *eval, long long *out)
     return expr_error(eval, "invalid expression");
 }
 
-static int expr_parse_unary(ExprEval *eval, long long *out)
+static int expr_parse_unary(ExprEval *eval, long long *out, int evaluate)
 {
     expr_skip_ws(eval);
 
     if (expr_match_char(eval, '+'))
     {
-        return expr_parse_unary(eval, out);
+        return expr_parse_unary(eval, out, evaluate);
     }
 
     if (expr_match_char(eval, '-'))
     {
-        if (!expr_parse_unary(eval, out))
+        if (!expr_parse_unary(eval, out, evaluate))
         {
             return 0;
         }
-        *out = -*out;
+
+        if (evaluate)
+        {
+            *out = -*out;
+        }
+        else
+        {
+            *out = 0;
+        }
+
         return 1;
     }
 
     if (expr_match_char(eval, '!'))
     {
-        if (!expr_parse_unary(eval, out))
+        if (!expr_parse_unary(eval, out, evaluate))
         {
             return 0;
         }
-        *out = (*out == 0) ? 1 : 0;
+
+        if (evaluate)
+        {
+            *out = (*out == 0) ? 1 : 0;
+        }
+        else
+        {
+            *out = 0;
+        }
+
         return 1;
     }
 
-    return expr_parse_primary(eval, out);
+    return expr_parse_primary(eval, out, evaluate);
 }
 
-static int expr_parse_multiplicative(ExprEval *eval, long long *out)
+static int expr_parse_multiplicative(ExprEval *eval, long long *out, int evaluate)
 {
-    if (!expr_parse_unary(eval, out))
+    if (!expr_parse_unary(eval, out, evaluate))
     {
         return 0;
     }
@@ -406,39 +471,63 @@ static int expr_parse_multiplicative(ExprEval *eval, long long *out)
 
         if (expr_match_char(eval, '*'))
         {
-            if (!expr_parse_unary(eval, &right))
+            if (!expr_parse_unary(eval, &right, evaluate))
             {
                 return 0;
             }
-            *out = (*out) * right;
+
+            if (evaluate)
+            {
+                *out = (*out) * right;
+            }
+            else
+            {
+                *out = 0;
+            }
             continue;
         }
 
         if (expr_match_char(eval, '/'))
         {
-            if (!expr_parse_unary(eval, &right))
+            if (!expr_parse_unary(eval, &right, evaluate))
             {
                 return 0;
             }
-            if (right == 0)
+
+            if (evaluate)
             {
-                return expr_semantic_error(eval, "Division by zero");
+                if (right == 0)
+                {
+                    return expr_semantic_error(eval, "Division by zero");
+                }
+                *out = (*out) / right;
             }
-            *out = (*out) / right;
+            else
+            {
+                *out = 0;
+            }
             continue;
         }
 
         if (expr_match_char(eval, '%'))
         {
-            if (!expr_parse_unary(eval, &right))
+            if (!expr_parse_unary(eval, &right, evaluate))
             {
                 return 0;
             }
-            if (right == 0)
+
+            if (evaluate)
             {
-                return expr_semantic_error(eval, "Division by zero");
+                if (right == 0)
+                {
+                    return expr_semantic_error(eval, "Division by zero");
+                }
+                *out = (*out) % right;
             }
-            *out = (*out) % right;
+            else
+            {
+                *out = 0;
+            }
             continue;
         }
 
@@ -446,9 +535,9 @@ static int expr_parse_multiplicative(ExprEval *eval, long long *out)
     }
 }
 
-static int expr_parse_additive(ExprEval *eval, long long *out)
+static int expr_parse_additive(ExprEval *eval, long long *out, int evaluate)
 {
-    if (!expr_parse_multiplicative(eval, out))
+    if (!expr_parse_multiplicative(eval, out, evaluate))
     {
         return 0;
     }
@@ -459,21 +548,37 @@ static int expr_parse_additive(ExprEval *eval, long long *out)
 
         if (expr_match_char(eval, '+'))
         {
-            if (!expr_parse_multiplicative(eval, &right))
+            if (!expr_parse_multiplicative(eval, &right, evaluate))
             {
                 return 0;
             }
-            *out = (*out) + right;
+
+            if (evaluate)
+            {
+                *out = (*out) + right;
+            }
+            else
+            {
+                *out = 0;
+            }
             continue;
         }
 
         if (expr_match_char(eval, '-'))
         {
-            if (!expr_parse_multiplicative(eval, &right))
+            if (!expr_parse_multiplicative(eval, &right, evaluate))
             {
                 return 0;
             }
-            *out = (*out) - right;
+
+            if (evaluate)
+            {
+                *out = (*out) - right;
+            }
+            else
+            {
+                *out = 0;
+            }
             continue;
         }
 
@@ -481,9 +586,9 @@ static int expr_parse_additive(ExprEval *eval, long long *out)
     }
 }
 
-static int expr_parse_relational(ExprEval *eval, long long *out)
+static int expr_parse_relational(ExprEval *eval, long long *out, int evaluate)
 {
-    if (!expr_parse_additive(eval, out))
+    if (!expr_parse_additive(eval, out, evaluate))
     {
         return 0;
     }
@@ -494,41 +599,73 @@ static int expr_parse_relational(ExprEval *eval, long long *out)
 
         if (expr_match_text(eval, "<="))
         {
-            if (!expr_parse_additive(eval, &right))
+            if (!expr_parse_additive(eval, &right, evaluate))
             {
                 return 0;
             }
-            *out = (*out <= right) ? 1 : 0;
+
+            if (evaluate)
+            {
+                *out = (*out <= right) ? 1 : 0;
+            }
+            else
+            {
+                *out = 0;
+            }
             continue;
         }
 
         if (expr_match_text(eval, ">="))
         {
-            if (!expr_parse_additive(eval, &right))
+            if (!expr_parse_additive(eval, &right, evaluate))
             {
                 return 0;
             }
-            *out = (*out >= right) ? 1 : 0;
+
+            if (evaluate)
+            {
+                *out = (*out >= right) ? 1 : 0;
+            }
+            else
+            {
+                *out = 0;
+            }
             continue;
         }
 
         if (expr_match_char(eval, '<'))
         {
-            if (!expr_parse_additive(eval, &right))
+            if (!expr_parse_additive(eval, &right, evaluate))
             {
                 return 0;
             }
-            *out = (*out < right) ? 1 : 0;
+
+            if (evaluate)
+            {
+                *out = (*out < right) ? 1 : 0;
+            }
+            else
+            {
+                *out = 0;
+            }
             continue;
         }
 
         if (expr_match_char(eval, '>'))
         {
-            if (!expr_parse_additive(eval, &right))
+            if (!expr_parse_additive(eval, &right, evaluate))
             {
                 return 0;
             }
-            *out = (*out > right) ? 1 : 0;
+
+            if (evaluate)
+            {
+                *out = (*out > right) ? 1 : 0;
+            }
+            else
+            {
+                *out = 0;
+            }
             continue;
         }
 
@@ -536,9 +673,9 @@ static int expr_parse_relational(ExprEval *eval, long long *out)
     }
 }
 
-static int expr_parse_equality(ExprEval *eval, long long *out)
+static int expr_parse_equality(ExprEval *eval, long long *out, int evaluate)
 {
-    if (!expr_parse_relational(eval, out))
+    if (!expr_parse_relational(eval, out, evaluate))
     {
         return 0;
     }
@@ -549,21 +686,37 @@ static int expr_parse_equality(ExprEval *eval, long long *out)
 
         if (expr_match_text(eval, "=="))
         {
-            if (!expr_parse_relational(eval, &right))
+            if (!expr_parse_relational(eval, &right, evaluate))
             {
                 return 0;
             }
-            *out = (*out == right) ? 1 : 0;
+
+            if (evaluate)
+            {
+                *out = (*out == right) ? 1 : 0;
+            }
+            else
+            {
+                *out = 0;
+            }
             continue;
         }
 
         if (expr_match_text(eval, "!="))
         {
-            if (!expr_parse_relational(eval, &right))
+            if (!expr_parse_relational(eval, &right, evaluate))
             {
                 return 0;
             }
-            *out = (*out != right) ? 1 : 0;
+
+            if (evaluate)
+            {
+                *out = (*out != right) ? 1 : 0;
+            }
+            else
+            {
+                *out = 0;
+            }
             continue;
         }
 
@@ -571,53 +724,93 @@ static int expr_parse_equality(ExprEval *eval, long long *out)
     }
 }
 
-static int expr_parse_logical_and(ExprEval *eval, long long *out)
+static int expr_parse_logical_and(ExprEval *eval, long long *out, int evaluate)
 {
-    if (!expr_parse_equality(eval, out))
+    if (!expr_parse_equality(eval, out, evaluate))
     {
         return 0;
     }
 
     while (1)
     {
-        long long right;
+        long long right = 0;
 
         if (!expr_match_text(eval, "&&"))
         {
             return 1;
         }
 
-        if (!expr_parse_equality(eval, &right))
+        if (!evaluate)
+        {
+            if (!expr_parse_equality(eval, &right, 0))
+            {
+                return 0;
+            }
+            *out = 0;
+            continue;
+        }
+
+        if (*out == 0)
+        {
+            if (!expr_parse_equality(eval, &right, 0))
+            {
+                return 0;
+            }
+            *out = 0;
+            continue;
+        }
+
+        if (!expr_parse_equality(eval, &right, 1))
         {
             return 0;
         }
 
-        *out = ((*out != 0) && (right != 0)) ? 1 : 0;
+        *out = (right != 0) ? 1 : 0;
     }
 }
 
-static int expr_parse_expression(ExprEval *eval, long long *out)
+static int expr_parse_expression(ExprEval *eval, long long *out, int evaluate)
 {
-    if (!expr_parse_logical_and(eval, out))
+    if (!expr_parse_logical_and(eval, out, evaluate))
     {
         return 0;
     }
 
     while (1)
     {
-        long long right;
+        long long right = 0;
 
         if (!expr_match_text(eval, "||"))
         {
             return 1;
         }
 
-        if (!expr_parse_logical_and(eval, &right))
+        if (!evaluate)
+        {
+            if (!expr_parse_logical_and(eval, &right, 0))
+            {
+                return 0;
+            }
+            *out = 0;
+            continue;
+        }
+
+        if (*out != 0)
+        {
+            if (!expr_parse_logical_and(eval, &right, 0))
+            {
+                return 0;
+            }
+            *out = 1;
+            continue;
+        }
+
+        if (!expr_parse_logical_and(eval, &right, 1))
         {
             return 0;
         }
 
-        *out = ((*out != 0) || (right != 0)) ? 1 : 0;
+        *out = (right != 0) ? 1 : 0;
     }
 }
 
@@ -641,7 +834,7 @@ int evaluate_expression(
     eval.context = context;
     eval.error = error;
 
-    if (!expr_parse_expression(&eval, &value))
+    if (!expr_parse_expression(&eval, &value, 1))
     {
         return 0;
     }

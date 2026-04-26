@@ -311,50 +311,11 @@ ExecCode executor_execute_program(
     char **result)
 {
     const AstCommand *command = program;
-    ValidatorContext *validator = validator_create();
     char *last_result = copy_string("");
 
     if (!last_result)
     {
-        if (validator)
-        {
-            validator_destroy(validator);
-        }
         tcl_error_set(error, TCL_ERROR_SYSTEM, 1, 1, "out of memory");
-        return EXEC_CODE_ERROR;
-    }
-
-    if (!validator)
-    {
-        free(last_result);
-        tcl_error_set(error, TCL_ERROR_SYSTEM, 1, 1, "failed to initialize validator");
-        return EXEC_CODE_ERROR;
-    }
-
-    {
-        const Procedure *procedure = context->procedures;
-        while (procedure)
-        {
-            if (!validator_declare_procedure(
-                    validator,
-                    procedure->name,
-                    procedure->arg_count,
-                    error,
-                    1,
-                    1))
-            {
-                validator_destroy(validator);
-                free(last_result);
-                return EXEC_CODE_ERROR;
-            }
-            procedure = procedure->next;
-        }
-    }
-
-    if (!validator_validate_program(validator, program, error))
-    {
-        validator_destroy(validator);
-        free(last_result);
         return EXEC_CODE_ERROR;
     }
 
@@ -365,7 +326,6 @@ ExecCode executor_execute_program(
 
         if (code != EXEC_CODE_OK)
         {
-            validator_destroy(validator);
             free(last_result);
             if (command_result)
             {
@@ -382,14 +342,12 @@ ExecCode executor_execute_program(
         last_result = command_result;
         if (!last_result)
         {
-            validator_destroy(validator);
             return set_system_error(error, command->span.line, command->span.column, "out of memory");
         }
 
         command = command->next;
     }
 
-    validator_destroy(validator);
     *result = last_result;
     return EXEC_CODE_OK;
 }
