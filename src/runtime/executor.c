@@ -9,9 +9,6 @@
 #include "runtime/validator.h"
 #include "runtime/variables.h"
 
-/* -------------------------------------------------------------------------- */
-/*  Lifecycle                                                                 */
-/* -------------------------------------------------------------------------- */
 
 ExecutorContext *executor_create(FILE *stdin_stream, FILE *stdout_stream, FILE *stderr_stream)
 {
@@ -64,9 +61,6 @@ void executor_destroy(ExecutorContext *context)
     free(context);
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Utilities                                                                 */
-/* -------------------------------------------------------------------------- */
 
 static char *copy_string(const char *text)
 {
@@ -185,10 +179,6 @@ static int is_supported_var_name(const char *name)
     return 1;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Procedure helpers                                                         */
-/* -------------------------------------------------------------------------- */
-
 static Procedure *procedure_find(Procedure *head, const char *name)
 {
     while (head)
@@ -290,19 +280,12 @@ static int procedure_add_or_update(
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Forward declarations                                                      */
-/* -------------------------------------------------------------------------- */
-
 static ExecCode execute_command(
     ExecutorContext *context,
     const AstCommand *command,
     TclError *error,
     char **result);
 
-/* -------------------------------------------------------------------------- */
-/*  Script execution core                                                     */
-/* -------------------------------------------------------------------------- */
 
 ExecCode executor_execute_program(
     ExecutorContext *context,
@@ -352,9 +335,6 @@ ExecCode executor_execute_program(
     return EXEC_CODE_OK;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Control/condition helpers                                                 */
-/* -------------------------------------------------------------------------- */
 
 static ExecCode evaluate_condition(
     ExecutorContext *context,
@@ -508,10 +488,6 @@ static ExecCode execute_if_command(
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Procedure invocation                                                      */
-/* -------------------------------------------------------------------------- */
-
 static int bind_proc_arguments(
     Variables *local_vars,
     const char *args_text,
@@ -645,9 +621,6 @@ static ExecCode execute_procedure_call(
     return body_code;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Built-ins                                                                 */
-/* -------------------------------------------------------------------------- */
 
 static int is_expand_word_type(AstWordType type)
 {
@@ -1101,9 +1074,6 @@ static ExecCode builtin_gets(
     return EXEC_CODE_OK;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Command dispatcher                                                        */
-/* -------------------------------------------------------------------------- */
 
 static ExecCode execute_command(
     ExecutorContext *context,
@@ -1574,10 +1544,6 @@ cleanup:
     free((void *)words);
     return code;
 }
-
-/* -------------------------------------------------------------------------- */
-/*  Public executor                                                           */
-/* -------------------------------------------------------------------------- */
 
 int executor_execute(ExecutorContext *context, const AstCommand *program, TclError *error)
 {

@@ -9,9 +9,6 @@
 #include "runtime/validator.h"
 #include "runtime/variables.h"
 
-/* -------------------------------------------------------------------------- */
-/*  Shared text buffer helper                                                 */
-/* -------------------------------------------------------------------------- */
 
 int append_text(char **buffer, size_t *capacity, size_t *length, const char *text, size_t text_length)
 {
@@ -42,9 +39,6 @@ int append_text(char **buffer, size_t *capacity, size_t *length, const char *tex
     return 1;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Variable helpers                                                          */
-/* -------------------------------------------------------------------------- */
 
 static int is_var_start_char(char c)
 {
@@ -94,9 +88,6 @@ static int is_supported_var_name(const char *name)
     return 1;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Escape decoding                                                           */
-/* -------------------------------------------------------------------------- */
 
 static int decode_escape(
     const char *text,
@@ -170,9 +161,6 @@ static int decode_escape(
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Script execution from text                                                */
-/* -------------------------------------------------------------------------- */
 
 ExecCode execute_script_text_with_code(
     ExecutorContext *context,
@@ -259,10 +247,6 @@ int execute_script_text(
     return 1;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Command substitution                                                      */
-/* -------------------------------------------------------------------------- */
-
 int execute_command_substitution(
     ExecutorContext *context,
     const char *text,
@@ -347,10 +331,6 @@ int execute_command_substitution(
     *result = inner_result;
     return 1;
 }
-
-/* -------------------------------------------------------------------------- */
-/*  String resolution                                                         */
-/* -------------------------------------------------------------------------- */
 
 static int append_variable_value(
     ExecutorContext *context,
@@ -588,10 +568,6 @@ int resolve_string_text(
     return 1;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Word evaluation                                                           */
-/* -------------------------------------------------------------------------- */
-
 int evaluate_word(ExecutorContext *context, const AstWord *word, TclError *error, char **result)
 {
     if (word->type == AST_WORD_BRACED)
@@ -703,10 +679,6 @@ int evaluate_words(
     *value_count = count;
     return 1;
 }
-
-/* -------------------------------------------------------------------------- */
-/*  Tcl list item parser (for proc arg list)                                  */
-/* -------------------------------------------------------------------------- */
 
 static int parse_list_braced_item(const char *text, size_t *index, size_t length, char **item)
 {
