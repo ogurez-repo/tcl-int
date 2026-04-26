@@ -445,23 +445,6 @@ static void advance_line(const char *text, int length)
     return QUOTED;
 }
 
-<CMDSTART,INITIAL>\{\*\} {
-    int next_character = scanner_next_char_no_refill();
-
-    if (next_character != EOF)
-    {
-        unput(next_character);
-    }
-
-    BEGIN(INITIAL);
-    if (next_character == EOF || is_word_delimiter(next_character))
-    {
-        return EXPAND_EMPTY;
-    }
-
-    return EXPAND_PREFIX;
-}
-
 <CMDSTART,INITIAL>\{ {
     braced_reset();
     s_braced_depth = 1;
@@ -576,22 +559,7 @@ static void advance_line(const char *text, int length)
     return INVALID;
 }
 
-<CMDSTART,INITIAL>\$[A-Za-z_][A-Za-z0-9_:]*\([^ \t\r\n\";{}]*\) {
-    yylval.str = duplicate_token_text(yytext + 1);
-    if (!yylval.str)
-    {
-        if (s_error && s_error->type == TCL_ERROR_NONE)
-        {
-            tcl_error_set(s_error, TCL_ERROR_SYSTEM, yylloc.first_line, yylloc.first_column, "out of memory");
-        }
-        return INVALID;
-    }
-
-    BEGIN(INITIAL);
-    return VAR;
-}
-
-<CMDSTART,INITIAL>\$\{[^}\r\n]+\} {
+<CMDSTART,INITIAL>\$\{[A-Za-z_][A-Za-z0-9_]*\} {
     yylval.str = duplicate_substring(yytext + 2, (size_t)yyleng - 3);
     if (!yylval.str)
     {
@@ -606,7 +574,7 @@ static void advance_line(const char *text, int length)
     return VAR_BRACED;
 }
 
-<CMDSTART,INITIAL>\$[A-Za-z_][A-Za-z0-9_:]* {
+<CMDSTART,INITIAL>\$[A-Za-z_][A-Za-z0-9_]* {
     yylval.str = duplicate_token_text(yytext + 1);
     if (!yylval.str)
     {

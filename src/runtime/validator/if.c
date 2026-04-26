@@ -14,7 +14,7 @@ int validator_validate_if_words(ValidatorContext *context, const AstWord **words
         return 0;
     }
 
-    for (;;)
+    while (1)
     {
         const AstWord *condition;
         const AstWord *body;
@@ -94,23 +94,6 @@ int validator_validate_if_words(ValidatorContext *context, const AstWord **words
             return 1;
         }
 
-        /* Tcl allows implicit else body without the 'else' keyword. */
-        body = words[index++];
-        if (!validator_validate_script_text(
-                context,
-                body->text,
-                body->span.line,
-                body->span.column + 1,
-                error))
-        {
-            return 0;
-        }
-
-        if (index != count)
-        {
-            return validator_syntax_error_at_word(error, words[index], "unexpected token after else body");
-        }
-
-        return 1;
+        return validator_syntax_error_at_word(error, words[index], "expected elseif or else");
     }
 }

@@ -48,6 +48,8 @@ int execute_command_substitution(
     const char *text,
     size_t length,
     size_t start,
+    int base_line,
+    int base_column,
     size_t *end,
     TclError *error,
     char **result);
@@ -69,10 +71,26 @@ int execute_script_text(
     int column,
     TclError *error);
 
+/* Parse a string as a script and execute it with full control-flow propagation. */
+ExecCode execute_script_text_with_code(
+    ExecutorContext *context,
+    const char *text,
+    int line,
+    int column,
+    TclError *error,
+    char **result);
+
+/* Execute an AST program and return both control-flow code and script result. */
+ExecCode executor_execute_program(
+    ExecutorContext *context,
+    const AstCommand *program,
+    TclError *error,
+    char **result);
+
 /* Parse one item from a Tcl-formatted list string. */
 int parse_list_item(const char *text, size_t *index, char **item);
 
-/* Convert a numeric string to long long (supports 0x, 0b, 0o, decimal, float). */
+/* Convert a decimal integer string to long long. */
 int expr_to_longlong(const char *str, long long *out);
 
 #endif

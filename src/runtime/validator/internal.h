@@ -10,9 +10,7 @@
 typedef struct Procedure
 {
     char *name;
-    size_t required_count;
-    size_t max_count;
-    int variadic;
+    size_t arg_count;
     struct Procedure *next;
 } Procedure;
 
@@ -37,9 +35,7 @@ Procedure *validator_find_procedure(ValidatorContext *context, const char *name)
 int validator_add_or_update_procedure(
     ValidatorContext *context,
     const char *name,
-    size_t required_count,
-    size_t max_count,
-    int variadic,
+    size_t arg_count,
     TclError *error,
     const AstWord *source);
 

@@ -23,5 +23,7 @@ void variables_destroy(Variables *variables);
 int variables_set(Variables *variables, const char *name, const char *value);
 /* Returns internal pointer owned by store, valid until next mutation/destroy. */
 const char *variables_get(const Variables *variables, const char *name);
+/* Returns 1 if a variable was removed, 0 if it was not found. */
+int variables_unset(Variables *variables, const char *name);
 
 #endif

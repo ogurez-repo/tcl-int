@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,6 +14,12 @@ typedef enum ExecutionMode
     EXEC_MODE_CHECK
 } ExecutionMode;
 
+typedef struct CliOptions
+{
+    ExecutionMode mode;
+    const char *script_path;
+} CliOptions;
+
 static void print_error(FILE *stream, const TclError *error)
 {
     fprintf(
@@ -24,34 +31,46 @@ static void print_error(FILE *stream, const TclError *error)
         error->message);
 }
 
-static int parse_execution_mode(int argc, char **argv, ExecutionMode *mode)
+static int parse_execution_mode(int argc, char **argv, CliOptions *options)
 {
-    if (argc <= 1)
-    {
-        *mode = EXEC_MODE_RUN;
-        return 1;
-    }
+    int index;
 
-    if (argc == 2)
+    options->mode = EXEC_MODE_RUN;
+    options->script_path = NULL;
+
+    for (index = 1; index < argc; index++)
     {
-        if (strcmp(argv[1], "--run") == 0)
+        if (strcmp(argv[index], "--run") == 0)
         {
-            *mode = EXEC_MODE_RUN;
-            return 1;
+            options->mode = EXEC_MODE_RUN;
+            continue;
         }
 
-        if (strcmp(argv[1], "--check") == 0)
+        if (strcmp(argv[index], "--check") == 0)
         {
-            *mode = EXEC_MODE_CHECK;
-            return 1;
+            options->mode = EXEC_MODE_CHECK;
+            continue;
         }
+
+        if (argv[index][0] == '-' && argv[index][1] != '\0')
+        {
+            fprintf(stderr, "usage: %s [--run|--check] [script_file]\n", argv[0]);
+            return 0;
+        }
+
+        if (options->script_path)
+        {
+            fprintf(stderr, "usage: %s [--run|--check] [script_file]\n", argv[0]);
+            return 0;
+        }
+
+        options->script_path = argv[index];
     }
 
-    fprintf(stderr, "usage: %s [--run|--check]\n", argv[0]);
-    return 0;
+    return 1;
 }
 
-static char *read_all_stdin(void)
+static char *read_all_stream(FILE *stream)
 {
     size_t capacity = 4096;
     size_t length = 0;
@@ -63,7 +82,7 @@ static char *read_all_stdin(void)
         return NULL;
     }
 
-    while ((character = fgetc(stdin)) != EOF)
+    while ((character = fgetc(stream)) != EOF)
     {
         if (length + 1 >= capacity)
         {
@@ -82,7 +101,7 @@ static char *read_all_stdin(void)
         buffer[length++] = (char)character;
     }
 
-    if (ferror(stdin))
+    if (ferror(stream))
     {
         free(buffer);
         return NULL;
@@ -92,36 +111,63 @@ static char *read_all_stdin(void)
     return buffer;
 }
 
+static char *read_all_file(const char *path)
+{
+    FILE *file = fopen(path, "rb");
+    char *content;
+
+    if (!file)
+    {
+        return NULL;
+    }
+
+    content = read_all_stream(file);
+    fclose(file);
+    return content;
+}
+
 int main(int argc, char **argv)
 {
-    char *script;
     TclError error;
     AstCommand *program;
-    ExecutionMode mode;
+    CliOptions options;
     ValidatorContext *validator = NULL;
     ExecutorContext *context = NULL;
+    char *script = NULL;
 
-    if (!parse_execution_mode(argc, argv, &mode))
+    if (!parse_execution_mode(argc, argv, &options))
     {
         return EXIT_FAILURE;
     }
 
-    if (mode == EXEC_MODE_RUN)
+    if (options.script_path)
     {
-        context = executor_create(stdout, stderr);
-        if (!context)
+        script = read_all_file(options.script_path);
+        if (!script)
         {
-            fprintf(stderr, "failed to initialize executor\n");
+            fprintf(stderr, "failed to read script file: %s\n", options.script_path);
+            return EXIT_FAILURE;
+        }
+    }
+    else
+    {
+        script = read_all_stream(stdin);
+        if (!script)
+        {
+            fprintf(stderr, "failed to read input\n");
             return EXIT_FAILURE;
         }
     }
 
-    script = read_all_stdin();
-    if (!script)
+    if (options.mode == EXEC_MODE_RUN)
     {
-        fprintf(stderr, "failed to read input\n");
-        executor_destroy(context);
-        return EXIT_FAILURE;
+        context = executor_create(stdin, stdout, stderr);
+        if (!context)
+        {
+            fprintf(stderr, "failed to initialize executor\n");
+            free(script);
+            return EXIT_FAILURE;
+        }
     }
 
     tcl_error_clear(&error);
@@ -135,7 +181,7 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    if (mode == EXEC_MODE_CHECK)
+    if (options.mode == EXEC_MODE_CHECK)
     {
         validator = validator_create();
         if (!validator)

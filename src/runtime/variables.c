@@ -144,3 +144,47 @@ const char *variables_get(const Variables *variables, const char *name)
 
     return NULL;
 }
+
+int variables_unset(Variables *variables, const char *name)
+{
+    List *current;
+    List *previous = NULL;
+
+    if (!variables)
+    {
+        return 0;
+    }
+
+    current = variables->head;
+    while (current)
+    {
+        Variable *variable = (Variable *)current->data;
+        if (strcmp(variable->name, name) == 0)
+        {
+            List *next = current->next;
+            free_variable_data(current->data);
+            free(current);
+
+            if (previous)
+            {
+                previous->next = next;
+            }
+            else
+            {
+                variables->head = next;
+            }
+
+            if (!next)
+            {
+                variables->tail = previous;
+            }
+
+            return 1;
+        }
+
+        previous = current;
+        current = current->next;
+    }
+
+    return 0;
+}

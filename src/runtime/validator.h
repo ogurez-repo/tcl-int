@@ -17,9 +17,7 @@ int validator_has_procedure(const ValidatorContext *context, const char *name);
 int validator_declare_procedure(
     ValidatorContext *context,
     const char *name,
-    size_t required_count,
-    size_t max_count,
-    int variadic,
+    size_t arg_count,
     TclError *error,
     int line,
     int column);

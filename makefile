@@ -41,7 +41,7 @@ OBJECTS = $(SRC_OBJECTS) $(GEN_OBJECTS)
 
 $(SRC_OBJECTS): $(PARSER_H)
 
-.PHONY: all build clean clean-all run test help check-tools check-test-tools
+.PHONY: all build clean clean-all run test test-parser-lexer test-runtime help check-tools check-test-tools
 
 all: check-tools $(TARGET)
 build: check-tools $(TARGET)
@@ -85,11 +85,19 @@ run: $(TARGET)
 test: check-test-tools $(TARGET)
 	pytest -q
 
+test-parser-lexer: check-test-tools $(TARGET)
+	pytest -q tests/parser_lexer
+
+test-runtime: check-test-tools $(TARGET)
+	pytest -q tests/runtime
+
 help:
 	@echo "Targets:"
 	@echo "  make / make all    Build the interpreter"
 	@echo "  make run           Run the interpreter"
 	@echo "  make test          Run Python tests"
+	@echo "  make test-parser-lexer  Run parser/lexer-focused tests"
+	@echo "  make test-runtime       Run runtime-focused tests"
 	@echo "  make clean         Remove build output"
 	@echo "  make clean-all     Alias for clean"
 

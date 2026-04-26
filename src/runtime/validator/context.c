@@ -44,18 +44,14 @@ int validator_has_procedure(const ValidatorContext *context, const char *name)
 int validator_add_or_update_procedure(
     ValidatorContext *context,
     const char *name,
-    size_t required_count,
-    size_t max_count,
-    int variadic,
+    size_t arg_count,
     TclError *error,
     const AstWord *source)
 {
     return validator_declare_procedure(
         context,
         name,
-        required_count,
-        max_count,
-        variadic,
+        arg_count,
         error,
         source->span.line,
         source->span.column);
@@ -64,9 +60,7 @@ int validator_add_or_update_procedure(
 int validator_declare_procedure(
     ValidatorContext *context,
     const char *name,
-    size_t required_count,
-    size_t max_count,
-    int variadic,
+    size_t arg_count,
     TclError *error,
     int line,
     int column)
@@ -75,9 +69,7 @@ int validator_declare_procedure(
 
     if (procedure)
     {
-        procedure->required_count = required_count;
-        procedure->max_count = max_count;
-        procedure->variadic = variadic;
+        procedure->arg_count = arg_count;
         return 1;
     }
 
@@ -96,9 +88,7 @@ int validator_declare_procedure(
         return 0;
     }
 
-    procedure->required_count = required_count;
-    procedure->max_count = max_count;
-    procedure->variadic = variadic;
+    procedure->arg_count = arg_count;
     procedure->next = context->procedures;
     context->procedures = procedure;
     return 1;
