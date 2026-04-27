@@ -1,0 +1,126 @@
+Команды, поддерживаемые валидатором (--check mode)
+=====================================================
+
+1. Команды с полной валидацией арности и подкоманд
+----------------------------------------------------
+
+after
+append
+array       -> subcommands: anymore, donesearch, exists, get, names,
+                             nextelement, set, size, startsearch, unset
+binary      -> subcommands: format, scan
+break
+catch
+cd
+clock       -> subcommands: clicks, format, scan, seconds
+close
+cmdsubst
+concat
+dict        -> subcommands: append, create, exists, get, incr, info,
+                             keys, lappend, merge, remove, replace,
+                             set, size, unset, values
+encoding    -> subcommands: convertfrom, convertto, names, system
+eof
+error
+eval
+exit
+expr
+fconfigure
+fcopy
+file        -> subcommands: atime, copy, delete, dirname, executable,
+                             exists, extension, isdirectory, isfile,
+                             join, mkdir, mtime, normalize, readable,
+                             rename, rootname, size, tail, writable
+fileevent
+flush
+for
+foreach
+format
+gets
+global
+if
+incr
+info        -> subcommands: args, body, commands, complete, default,
+                             exist, exists, hostname, level, procs,
+                             script, vars
+lindex
+linsert
+list
+llength
+lrange
+lreplace
+namespace   -> subcommands: children, code, current, delete, eval,
+                             exists, export, import, inscope, parent,
+                             qualifiers, tail, which
+open
+package     -> subcommands: forget, ifneeded, names, present, provide,
+                             require, vcompare, versions
+proc
+put
+puts
+pwd
+read
+regexp
+regsub
+rename
+return
+scan
+seek
+set
+source
+split
+string      -> subcommands: compare, equal, first, index, last, length,
+                             map, match, range, repeat, replace,
+                             tolower, toupper, trim, trimleft, trimright
+subst
+switch
+tell
+throw
+trace       -> subcommands: add, info, remove, variable, vdelete, vinfo
+try
+unset
+update
+uplevel
+upvar
+variable
+vwait
+while
+
+
+2. Пользовательские процедуры (proc)
+-------------------------------------
+Процедуры, объявленные через `proc <name> <args> <body>`, валидируются
+по арности при вызове. Динамические имена и нелитеральные тела
+пропускаются без ошибки.
+
+
+3. Tk widget path commands
+---------------------------
+Любая команда, имя которой начинается с точки (`.`), автоматически
+принимается как Tk-команда виджета (например, `.button`, `.menu`,
+`.configure`).
+
+
+4. Validation-only команды (принимаются без глубокой проверки)
+---------------------------------------------------------------
+lsort, lsearch, lmap, interp,
+func, lambda, K, iota, Def, e.g., sproc,
+class, statemachine, console, dputs, pop, push,
+know, collect, more, dtm, mini, idof, bit,
+nand, gcd, loop, file'hexdump, db'get,
+bc'stack'balance, lf'simplify, ebc, t@, @,
+::set, ::Stack::do, ::Stack::1, Stack::Stack,
+::toot::(class)::(method), class | values,
+class | {values of the object}, p1, /Innerproduct,
+/hypot, iota1=.>:@i., o f g, f,g, 1 1, G.,
+<><>, a, 2a, 0!, -2:, d*sd*+q, <h>c,
+>tclsh, ..., *, :, vec,
+lrevert, /, +, qpop, not, bits, lset,
+Innerproduct, mean, hypot, multable, outProd,
+iota1, truthtable, int2word, -1:, <<>>, in,
+socket, toot::struct, _, filter, n!, 2, 0,
+g, f, initially, remember,
+-, rat, p2, formatMatrix, stack'balance, 0:,
+b=sqrt(2),
+message, pack, menu, wm, bind, tk_messageBox,
+ratsplit, set'contains
