@@ -277,7 +277,7 @@ static int scanner_next_char_no_refill(void)
 
     if (*(yy_c_buf_p) == YY_END_OF_BUFFER_CHAR)
     {
-        if ((yy_c_buf_p) < &YY_CURRENT_BUFFER_LVALUE->yy_ch_buf[(yy_n_chars)])
+        if ((yy_c_buf_p) < &YY_CURRENT_BUFFER->yy_ch_buf[(yy_n_chars)])
         {
             *(yy_c_buf_p) = '\0';
         }
@@ -589,6 +589,21 @@ static void advance_line(const char *text, int length)
 
     BEGIN(INITIAL);
     return VAR;
+}
+
+<CMDSTART,INITIAL>\$\{[^}\r\n]+\}[^ \t\r\n\";{}]+ {
+    yylval.str = scan_unquoted_word(yytext, (size_t)yyleng);
+    if (!yylval.str)
+    {
+        if (s_error && s_error->type == TCL_ERROR_NONE)
+        {
+            tcl_error_set(s_error, TCL_ERROR_SYSTEM, yylloc.first_line, yylloc.first_column, "out of memory");
+        }
+        return INVALID;
+    }
+
+    BEGIN(INITIAL);
+    return STRING;
 }
 
 <CMDSTART,INITIAL>\$\{[^}\r\n]+\} {

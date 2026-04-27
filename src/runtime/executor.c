@@ -1365,7 +1365,61 @@ static int execute_command(
         strcmp(command_name, "return") == 0 ||
         strcmp(command_name, "break") == 0 ||
         strcmp(command_name, "continue") == 0 ||
-        strcmp(command_name, "catch") == 0)
+        strcmp(command_name, "catch") == 0 ||
+        strcmp(command_name, "array") == 0 ||
+        strcmp(command_name, "unset") == 0 ||
+        strcmp(command_name, "append") == 0 ||
+        strcmp(command_name, "lappend") == 0 ||
+        strcmp(command_name, "lindex") == 0 ||
+        strcmp(command_name, "llength") == 0 ||
+        strcmp(command_name, "concat") == 0 ||
+        strcmp(command_name, "lrange") == 0 ||
+        strcmp(command_name, "linsert") == 0 ||
+        strcmp(command_name, "lreplace") == 0 ||
+        strcmp(command_name, "split") == 0 ||
+        strcmp(command_name, "join") == 0 ||
+        strcmp(command_name, "format") == 0 ||
+        strcmp(command_name, "scan") == 0 ||
+        strcmp(command_name, "error") == 0 ||
+        strcmp(command_name, "eval") == 0 ||
+        strcmp(command_name, "global") == 0 ||
+        strcmp(command_name, "upvar") == 0 ||
+        strcmp(command_name, "regexp") == 0 ||
+        strcmp(command_name, "regsub") == 0 ||
+        strcmp(command_name, "string") == 0 ||
+        strcmp(command_name, "info") == 0 ||
+        strcmp(command_name, "uplevel") == 0 ||
+        strcmp(command_name, "dict") == 0 ||
+        strcmp(command_name, "namespace") == 0 ||
+        strcmp(command_name, "variable") == 0 ||
+        strcmp(command_name, "source") == 0 ||
+        strcmp(command_name, "package") == 0 ||
+        strcmp(command_name, "rename") == 0 ||
+        strcmp(command_name, "exit") == 0 ||
+        strcmp(command_name, "cd") == 0 ||
+        strcmp(command_name, "pwd") == 0 ||
+        strcmp(command_name, "after") == 0 ||
+        strcmp(command_name, "trace") == 0 ||
+        strcmp(command_name, "clock") == 0 ||
+        strcmp(command_name, "vwait") == 0 ||
+        strcmp(command_name, "update") == 0 ||
+        strcmp(command_name, "try") == 0 ||
+        strcmp(command_name, "throw") == 0 ||
+        strcmp(command_name, "file") == 0 ||
+        strcmp(command_name, "open") == 0 ||
+        strcmp(command_name, "close") == 0 ||
+        strcmp(command_name, "gets") == 0 ||
+        strcmp(command_name, "read") == 0 ||
+        strcmp(command_name, "seek") == 0 ||
+        strcmp(command_name, "tell") == 0 ||
+        strcmp(command_name, "eof") == 0 ||
+        strcmp(command_name, "flush") == 0 ||
+        strcmp(command_name, "fcopy") == 0 ||
+        strcmp(command_name, "fconfigure") == 0 ||
+        strcmp(command_name, "fileevent") == 0 ||
+        strcmp(command_name, "encoding") == 0 ||
+        strcmp(command_name, "binary") == 0 ||
+        strcmp(command_name, "subst") == 0)
     {
         success = 1;
         goto cleanup;

@@ -129,26 +129,25 @@ int validator_collect_proc_definitions(ValidatorContext *context, const AstComma
             name_word = validator_word_at(command, 1);
             args_word = validator_word_at(command, 2);
 
-            if (!validator_word_is_literal_name(name_word))
+            if (validator_word_is_literal_name(name_word) &&
+                validator_word_is_literal_script(args_word))
             {
-                return validator_syntax_error_at_word(error, name_word, "proc name must be literal");
-            }
+                if (!parse_proc_args(args_word, &required_count, &max_count, &variadic, error))
+                {
+                    return 0;
+                }
 
-            if (!parse_proc_args(args_word, &required_count, &max_count, &variadic, error))
-            {
-                return 0;
-            }
-
-            if (!validator_add_or_update_procedure(
-                    context,
-                    name_word->text,
-                    required_count,
-                    max_count,
-                    variadic,
-                    error,
-                    name_word))
-            {
-                return 0;
+                if (!validator_add_or_update_procedure(
+                        context,
+                        name_word->text,
+                        required_count,
+                        max_count,
+                        variadic,
+                        error,
+                        name_word))
+                {
+                    return 0;
+                }
             }
         }
 

@@ -46,14 +46,17 @@ int validator_validate_if_words(ValidatorContext *context, const AstWord **words
         }
 
         body = words[index++];
-        if (!validator_validate_script_text(
-                context,
-                body->text,
-                body->span.line,
-                body->span.column + 1,
-                error))
+        if (validator_word_is_literal_script(body))
         {
-            return 0;
+            if (!validator_validate_script_text(
+                    context,
+                    body->text,
+                    body->span.line,
+                    body->span.column + 1,
+                    error))
+            {
+                return 0;
+            }
         }
 
         if (index >= count)

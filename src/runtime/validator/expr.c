@@ -347,7 +347,8 @@ static int expr_parse_identifier_or_call(ExprParser *parser)
 
             if (strcmp(lower_name, "inf") == 0 ||
                 strcmp(lower_name, "infinity") == 0 ||
-                strcmp(lower_name, "nan") == 0)
+                strcmp(lower_name, "nan") == 0 ||
+                strcmp(lower_name, "cmdsubst") == 0)
             {
                 return 1;
             }
@@ -580,6 +581,27 @@ static int expr_parse_primary(ExprParser *parser)
     if (parser->text[parser->index] == '{')
     {
         return expr_parse_braced(parser);
+    }
+
+    /* Handle runtime concatenation of numeric prefix with variable or command substitution,
+     * e.g. 0x$s, 0b$flag, 0o$perm, 0x[hexValue] */
+    if (parser->text[parser->index] == '0' && parser->index + 2 < parser->length)
+    {
+        char prefix = parser->text[parser->index + 1];
+        if ((prefix == 'x' || prefix == 'X' || prefix == 'b' || prefix == 'B' || prefix == 'o' || prefix == 'O'))
+        {
+            char next = parser->text[parser->index + 2];
+            if (next == '$')
+            {
+                parser->index += 2;
+                return expr_parse_variable(parser);
+            }
+            if (next == '[')
+            {
+                parser->index += 2;
+                return expr_parse_command_substitution(parser);
+            }
+        }
     }
 
     if (isdigit((unsigned char)parser->text[parser->index]) ||

@@ -85,6 +85,12 @@ int validator_word_is_literal_name(const AstWord *word)
         return 0;
     }
 
+    /* '$' alone is a literal name, not a variable substitution */
+    if (strcmp(word->text, "$") == 0)
+    {
+        return 1;
+    }
+
     return !word_has_substitution(word);
 }
 
