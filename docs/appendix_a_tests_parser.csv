@@ -1,0 +1,57 @@
+stdin,Ожидаемый stderr
+"set a 1
+puts $a",OK
+"puts ""abc",lexical error ... unterminated quoted string
+unknown 1,semantic error at 1:1: unknown command 'unknown'
+set a 1; put $a,OK
+"set a 1
+# comment
+put $a",OK
+put {hello world},OK
+if {$x > 0} {put pos} elseif {$x < 0} then {put neg} else {put zero},OK
+if {$x > 0},syntax error at 1:1: if expects condition and body
+if {$x > 0} {put pos} else,syntax error ... if missing else body
+while {$x < 10} {put $x},OK
+while {$x < 10},syntax error at 1:1: while expects exactly 2 arguments
+for {set i 0} {$i < 10} {set i [expr {$i + 1}]} {put $i},OK
+for {set i 0} {$i < 10} {set i 1},syntax error at 1:1: for expects exactly 4 arguments
+proc inc {x} {set y 1},OK
+proc inc {x},syntax error at 1:1: proc expects exactly 3 arguments
+"put ""abc",lexical error ... unterminated quoted string
+put {abc,lexical error ... unterminated braced string
+unknown 1,semantic error at 1:1: unknown command 'unknown'
+"set cmd unknown
+$cmd 1",semantic error at 2:1: unknown command 'unknown'
+if {1} {unknown 1},semantic error ... unknown command 'unknown'
+proc f {x} {set y 1 2},syntax error ... set expects 1 or 2 arguments
+"proc inc {x} {return [expr {$x + 1}]}
+inc",syntax error ... procedure expects more arguments
+return a b,syntax error at 1:1: return expects ?-option value ...? ?result?
+set a [expr {1 + 2},syntax error ... unterminated command substitution
+expr 1 + 2,OK
+expr,syntax error at 1:1: expr expects at least 1 argument
+expr {$x + },syntax error ... invalid expression
+expr {abc},syntax error ... invalid bareword in expression
+expr {1e + 1},syntax error ... invalid number
+expr {0x + 1},syntax error ... invalid number
+if {08 > 0} {puts ok},syntax error ... invalid number
+if {017 > 0} {puts ok},OK
+set a x[expr {1}]y,OK
+"set a hello\\
+world",syntax error at 1:1: set expects 1 or 2 arguments
+foreach x {a b} {puts $x},OK
+foreach {} {a b} {puts x},syntax error ... foreach varlist is empty
+"foreach ""x {y"" {a b} {puts x}",syntax error ... invalid foreach variable list
+switch -- $x {a {puts a} default {puts d}},OK
+switch -regexp -matchvar m -indexvar i -- abc {a(b)c {puts yes} default {puts no}},OK
+switch -bad abc {a {puts yes} default {puts no}},syntax error ... unknown switch option
+switch -matchvar m -- abc {abc {puts yes}},syntax error ... -matchvar option requires -regexp option
+switch -- $x {a {puts a} default},syntax error ... switch expects pattern/body pairs
+switch -- a {a -},syntax error ... switch pattern has no body
+array set arr {a 1 b 2},OK
+array bad arr,semantic error ... unknown array subcommand 'bad'
+unset,syntax error ... unset expects at least 1 argument
+string reverse hello,semantic error ... unknown string subcommand 'reverse'
+dict create a 1 b 2,OK
+dict create a 1 b,syntax error ... dict create expects ?key value ...?
+package bad,semantic error ... unknown package subcommand 'bad'

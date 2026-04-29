@@ -1,0 +1,105 @@
+stdin,Ожидаемый stdout,Ожидаемый stderr
+"set x 10
+puts [set x]","10
+",""""""
+set x 1; set y 2; puts [expr {$x + $y}],"3
+",""""""
+"set name Alice
+puts ""hello, $name""
+puts {$name}","hello, Alice
+$name
+",""""""
+puts [expr {2 + 3}],"5
+",""""""
+"set a [expr {1 + 1}]
+set b [puts hi]
+puts ""$a,$b""","hi
+2,
+",""""""
+"set x 10
+unset x
+set x","""""",contains: Undefined variable
+unset x,"""""",contains: Undefined variable
+"set x 10
+incr x
+incr x 5
+puts $x","16
+",""""""
+incr x,"""""",contains: Undefined variable
+"set x abc
+incr x","""""",contains: Expected integer
+"puts -nonewline ""a""
+puts stdout ""b""
+puts stderr ""err""","ab
+","err
+"
+"script: puts [gets stdin]; stdin_data: hello
+","hello
+",""""""
+"script: set n [gets stdin line]
+puts $n
+puts $line; stdin_data: hello
+","5
+hello
+",""""""
+"set x 0
+if {$x > 0} then {puts pos} elseif {$x < 0} {puts neg} else {puts zero}","zero
+",""""""
+"set i 0
+while {$i < 10} {incr i; if {$i == 3} {continue}; if {$i == 7} {break}; puts $i}","1
+2
+4
+5
+6
+",""""""
+for {set i 0} {$i < 5} {incr i} {puts $i},"0
+1
+2
+3
+4
+",""""""
+break,"""""",contains: break outside loop
+continue,"""""",contains: continue outside loop
+"proc add {a b} {return [expr {$a + $b}]}
+puts [add 2 3]","5
+",""""""
+"proc add {a b} {return [expr {$a + $b}]}
+add 1","""""",contains: expects 2 arguments
+"proc f {} {return 1; puts never}
+puts [f]","1
+",""""""
+return 1,"""""",contains: return outside procedure
+"set x 10
+proc f {} {set x 99; return $x}
+puts [f]
+puts $x","99
+10
+",""""""
+"proc g {} {break}
+while {1} {g}","""""",contains: break outside loop
+"proc g {} {continue}
+while {1} {g}","""""",contains: continue outside loop
+"proc factorial {n} {if {$n <= 1} {return 1} else {return [expr {$n * [factorial [expr {$n - 1}]]}]}}
+puts [factorial 5]","120
+",""""""
+"proc fib {n} {if {$n < 2} {return $n} else {return [expr {[fib [expr {$n - 1}]] + [fib [expr {$n - 2}]]}]}}
+puts [fib 7]","13
+",""""""
+switch 1 {1 {puts one}},"""""",contains: Unknown command / unknown command
+"puts [expr {(1 + 2) * 3}]
+puts [expr {7 / 2}]
+puts [expr {7 % 3}]
+puts [expr {5 > 2 && 1}]","9
+3
+1
+1
+",""""""
+two runs: expr {3.14}  и  expr {0x10},"""""",non-empty for both runs
+expr {2 ** 3},"""""",non-empty
+expr {1 / 0},"""""",contains: Division by zero
+set a(x) 1,"""""",contains: array/namespace variables are not supported
+"puts before
+puts [expr {[missing_cmd]}]","before
+",contains line marker: 2:
+puts ok,"ok
+",""""""
