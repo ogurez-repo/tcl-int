@@ -24,34 +24,61 @@ static void print_error(FILE *stream, const TclError *error)
         error->message);
 }
 
-static int parse_execution_mode(int argc, char **argv, ExecutionMode *mode)
+static void print_usage(FILE *stream, const char *program)
 {
-    if (argc <= 1)
-    {
-        *mode = EXEC_MODE_RUN;
-        return 1;
-    }
-
-    if (argc == 2)
-    {
-        if (strcmp(argv[1], "--run") == 0)
-        {
-            *mode = EXEC_MODE_RUN;
-            return 1;
-        }
-
-        if (strcmp(argv[1], "--check") == 0)
-        {
-            *mode = EXEC_MODE_CHECK;
-            return 1;
-        }
-    }
-
-    fprintf(stderr, "usage: %s [--run|--check]\n", argv[0]);
-    return 0;
+    fprintf(stream, "usage: %s [--run|--check] [script-file]\n", program);
 }
 
-static char *read_all_stdin(void)
+static int parse_arguments(int argc, char **argv, ExecutionMode *mode, const char **script_path)
+{
+    int i;
+
+    *mode = EXEC_MODE_RUN;
+    *script_path = NULL;
+
+    for (i = 1; i < argc; ++i)
+    {
+        const char *arg = argv[i];
+
+        if (strcmp(arg, "--run") == 0)
+        {
+            *mode = EXEC_MODE_RUN;
+            continue;
+        }
+
+        if (strcmp(arg, "--check") == 0)
+        {
+            *mode = EXEC_MODE_CHECK;
+            continue;
+        }
+
+        if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0)
+        {
+            print_usage(stdout, argv[0]);
+            return 0;
+        }
+
+        if (arg[0] == '-' && arg[1] != '\0')
+        {
+            fprintf(stderr, "unknown option: %s\n", arg);
+            print_usage(stderr, argv[0]);
+            return 0;
+        }
+
+        if (*script_path != NULL)
+        {
+            fprintf(stderr, "unexpected argument: %s\n", arg);
+            print_usage(stderr, argv[0]);
+            return 0;
+        }
+
+        *script_path = arg;
+    }
+
+    return 1;
+}
+
+static char *read_all_stream(FILE *stream)
 {
     size_t capacity = 4096;
     size_t length = 0;
@@ -63,7 +90,7 @@ static char *read_all_stdin(void)
         return NULL;
     }
 
-    while ((character = fgetc(stdin)) != EOF)
+    while ((character = fgetc(stream)) != EOF)
     {
         if (length + 1 >= capacity)
         {
@@ -82,7 +109,7 @@ static char *read_all_stdin(void)
         buffer[length++] = (char)character;
     }
 
-    if (ferror(stdin))
+    if (ferror(stream))
     {
         free(buffer);
         return NULL;
@@ -92,16 +119,33 @@ static char *read_all_stdin(void)
     return buffer;
 }
 
+static char *read_script_from_file(const char *path)
+{
+    FILE *stream;
+    char *buffer;
+
+    stream = fopen(path, "rb");
+    if (!stream)
+    {
+        return NULL;
+    }
+
+    buffer = read_all_stream(stream);
+    fclose(stream);
+    return buffer;
+}
+
 int main(int argc, char **argv)
 {
     char *script;
     TclError error;
     AstCommand *program;
     ExecutionMode mode;
+    const char *script_path = NULL;
     ValidatorContext *validator = NULL;
     ExecutorContext *context = NULL;
 
-    if (!parse_execution_mode(argc, argv, &mode))
+    if (!parse_arguments(argc, argv, &mode, &script_path))
     {
         return EXIT_FAILURE;
     }
@@ -116,12 +160,25 @@ int main(int argc, char **argv)
         }
     }
 
-    script = read_all_stdin();
-    if (!script)
+    if (script_path != NULL)
     {
-        fprintf(stderr, "failed to read input\n");
-        executor_destroy(context);
-        return EXIT_FAILURE;
+        script = read_script_from_file(script_path);
+        if (!script)
+        {
+            fprintf(stderr, "failed to read script: %s\n", script_path);
+            executor_destroy(context);
+            return EXIT_FAILURE;
+        }
+    }
+    else
+    {
+        script = read_all_stream(stdin);
+        if (!script)
+        {
+            fprintf(stderr, "failed to read input\n");
+            executor_destroy(context);
+            return EXIT_FAILURE;
+        }
     }
 
     tcl_error_clear(&error);

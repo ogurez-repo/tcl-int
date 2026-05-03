@@ -102,16 +102,30 @@ or directly:
 ./bin/tclsh
 ```
 
+The interpreter reads a script from `stdin` by default, but it also accepts a script file path as a positional argument (works the same on macOS, Linux, and Windows):
+
+```bash
+./bin/tclsh input.tcl
+```
+
+On Windows the binary is named `tclsh.exe`:
+
+```bat
+.\bin\tclsh.exe input.tcl
+```
+
 Validation-only mode (no command execution, AST + validator pipeline only):
 
 ```bash
 ./bin/tclsh --check
+./bin/tclsh --check input.tcl
 ```
 
 Explicit execution mode:
 
 ```bash
 ./bin/tclsh --run
+./bin/tclsh --run input.tcl
 ```
 
 Phase boundary note: `--check` is the mode for parser/validator work. It validates script structure and supported command syntax recursively, but does not execute command bodies or perform runtime effects.
