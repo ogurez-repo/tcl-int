@@ -33,7 +33,7 @@ static int parse_arguments(int argc, char **argv, ExecutionMode *mode, const cha
 {
     int i;
 
-    *mode = EXEC_MODE_RUN;
+    *mode = EXEC_MODE_CHECK;
     *script_path = NULL;
 
     for (i = 1; i < argc; ++i)

@@ -117,9 +117,6 @@ $(MSVC_OBJ_DIR)/gen/%.obj: $(GEN_DIR)/%.c | $(BIN_DIR) $(GEN_DIR)
 $(TARGET): $(OBJECTS) | $(BIN_DIR)
 	$(CC) $(CFLAGS) -o $(TARGET) $(OBJECTS)
 
-run: $(TARGET)
-	./$(TARGET)
-
 test: check-test-tools $(TARGET)
 	pytest -q
 
@@ -133,7 +130,6 @@ help:
 	@echo "Targets:"
 	@echo "  make / make all    Build the interpreter"
 	@echo "  make msvc          Build the interpreter with MSVC (cl)"
-	@echo "  make run           Run the interpreter"
 	@echo "  make test          Run Python tests"
 	@echo "  make test-parser-lexer  Run parser/lexer-focused tests"
 	@echo "  make test-runtime       Run runtime-focused tests"
