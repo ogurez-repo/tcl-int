@@ -5,7 +5,7 @@ def test_set_put(tcl: Tcl):
     tcl.set("foo", "bar")
     tcl.put("$foo")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -14,7 +14,7 @@ def test_set_put(tcl: Tcl):
 
 def test_put(tcl: Tcl):
     tcl.put("Hello")
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
     assert result.returncode == 0
     assert result.stderr == ""
     assert result.stdout.strip() == "Hello"
@@ -23,7 +23,7 @@ def test_put(tcl: Tcl):
 def test_put_quoted_with_spaces(tcl: Tcl):
     tcl.put('"hello world"')
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -33,7 +33,7 @@ def test_put_quoted_with_spaces(tcl: Tcl):
 def test_semicolon_separates_commands(tcl: Tcl):
     tcl.command("set a 1; put $a")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -45,7 +45,7 @@ def test_comment_at_command_start_is_ignored(tcl: Tcl):
     tcl.command("# comment")
     tcl.command("put $a")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -55,7 +55,7 @@ def test_comment_at_command_start_is_ignored(tcl: Tcl):
 def test_hash_in_middle_of_word_is_not_comment(tcl: Tcl):
     tcl.put("a#b")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -65,7 +65,7 @@ def test_hash_in_middle_of_word_is_not_comment(tcl: Tcl):
 def test_braced_word_keeps_spaces(tcl: Tcl):
     tcl.put("{hello world}")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -76,7 +76,7 @@ def test_braced_word_does_not_interpolate_variable(tcl: Tcl):
     tcl.set("a", "1")
     tcl.put("{$a}")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -86,7 +86,7 @@ def test_braced_word_does_not_interpolate_variable(tcl: Tcl):
 def test_nested_braced_word_is_literal(tcl: Tcl):
     tcl.put("{{a b}}")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -96,7 +96,7 @@ def test_nested_braced_word_is_literal(tcl: Tcl):
 def test_multiline_braced_word_is_literal(tcl: Tcl):
     tcl.command("put {hello\nworld}")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -224,7 +224,7 @@ def test_quoted_interpolated_set_command(tcl: Tcl):
     tcl.command('"$ab" a a')
     tcl.put("$a")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -234,7 +234,7 @@ def test_quoted_interpolated_set_command(tcl: Tcl):
 def test_quoted_literal_command_name_is_supported(tcl: Tcl):
     tcl.command('"puts" hello')
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -246,7 +246,7 @@ def test_quoted_prefixed_interpolated_set_command(tcl: Tcl):
     tcl.command('"s$a" bbbb b')
     tcl.put("$bbbb")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -256,7 +256,7 @@ def test_quoted_prefixed_interpolated_set_command(tcl: Tcl):
 def test_quoted_backslash_escape_sequences_are_interpreted(tcl: Tcl):
     tcl.command('puts "line1\\nline2\\tend"')
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -266,7 +266,7 @@ def test_quoted_backslash_escape_sequences_are_interpreted(tcl: Tcl):
 def test_quoted_octal_hex_unicode_escape_sequences_are_interpreted(tcl: Tcl):
     tcl.command('puts "\\101\\x42\\u0043\\U00000044"')
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -276,7 +276,7 @@ def test_quoted_octal_hex_unicode_escape_sequences_are_interpreted(tcl: Tcl):
 def test_quoted_incomplete_hex_unicode_escapes_fall_back_to_literal(tcl: Tcl):
     tcl.command('puts "\\x\\u\\U"')
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -286,7 +286,7 @@ def test_quoted_incomplete_hex_unicode_escapes_fall_back_to_literal(tcl: Tcl):
 def test_escaped_command_substitution_in_quotes_is_literal(tcl: Tcl):
     tcl.command('puts "\\[expr {1 + 2}\\]"')
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -296,7 +296,7 @@ def test_escaped_command_substitution_in_quotes_is_literal(tcl: Tcl):
 def test_escaped_unterminated_bracket_in_quotes_is_not_command_substitution(tcl: Tcl):
     tcl.command('puts "\\["')
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -308,7 +308,7 @@ def test_set_overwrites_existing_variable(tcl: Tcl):
     tcl.set("a", "2")
     tcl.put("$a")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -318,7 +318,7 @@ def test_set_overwrites_existing_variable(tcl: Tcl):
 def test_missing_variable_is_semantic_error(tcl: Tcl):
     tcl.put("$missing")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode != 0
     assert "semantic error" in result.stderr
@@ -385,7 +385,7 @@ def test_dynamic_unknown_command_is_semantic_error(tcl: Tcl):
     tcl.command("set cmd unknown")
     tcl.command("$cmd 1")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode != 0
     assert result.stderr == "semantic error at 2:1: unknown command 'unknown'\n"
@@ -396,7 +396,7 @@ def test_error_reports_absolute_input_line(tcl: Tcl):
     tcl.command("set b 2")
     tcl.command("put $missing")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode != 0
     assert result.stderr == "semantic error at 3:5: variable '$missing' not found\n"
@@ -486,7 +486,7 @@ def test_catch_is_validation_only(tcl: Tcl):
     tcl.command("catch {set a [expr {1/0}]} err")
     tcl.command("puts done")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -625,7 +625,7 @@ def test_leading_comment_before_command_is_accepted(tcl: Tcl):
     tcl.command("set a 1")
     tcl.command("puts $a")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -637,7 +637,7 @@ def test_leading_blank_line_before_command_is_accepted(tcl: Tcl):
     tcl.command("set a 1")
     tcl.command("puts $a")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -677,7 +677,7 @@ def test_backslash_newline_continuation_inside_quotes_keeps_single_word(tcl: Tcl
     tcl.command('world"')
     tcl.command("puts $a")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -700,7 +700,7 @@ def test_array_variable_reference_is_supported(tcl: Tcl):
     tcl.command("set a(x) 1")
     tcl.command("puts $a(x)")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -712,7 +712,7 @@ def test_array_variable_reference_with_substituted_index_is_supported(tcl: Tcl):
     tcl.command("set a(x) 42")
     tcl.command("puts $a($b)")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -724,7 +724,7 @@ def test_braced_variable_reference_keeps_literal_name(tcl: Tcl):
     tcl.command("set {a($b)} 9")
     tcl.command("puts ${a($b)}")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -735,7 +735,7 @@ def test_single_colon_is_not_treated_as_namespace_separator_in_variable_name(tcl
     tcl.command("set a 1")
     tcl.command('puts "$a:b"')
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -746,7 +746,7 @@ def test_namespace_separator_variable_reference_is_supported(tcl: Tcl):
     tcl.command("set ::ns::value 5")
     tcl.command("puts $::ns::value")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -757,7 +757,7 @@ def test_empty_array_name_variable_reference_is_supported(tcl: Tcl):
     tcl.command("set (k) 9")
     tcl.command("puts $(k)")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -769,7 +769,7 @@ def test_argument_expansion_from_variable_list_is_supported(tcl: Tcl):
     tcl.command("set {*}$pair")
     tcl.command("puts $name")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -780,7 +780,7 @@ def test_argument_expansion_from_braced_list_is_supported(tcl: Tcl):
     tcl.command("set {*}{x 7}")
     tcl.command("puts $x")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -792,7 +792,7 @@ def test_argument_expansion_applies_backslash_substitution_in_list_parser(tcl: T
     tcl.command("set {*}$pair")
     tcl.command("puts $x")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -803,7 +803,7 @@ def test_argument_expansion_with_malformed_list_is_error(tcl: Tcl):
     tcl.command('set pair "a {b"')
     tcl.command("set {*}$pair")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode != 0
     assert "syntax error" in result.stderr
@@ -814,7 +814,7 @@ def test_puts_nonewline(tcl: Tcl):
     tcl.command("puts -nonewline hello")
     tcl.command("puts world")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode == 0
     assert result.stderr == ""
@@ -1024,7 +1024,7 @@ def test_switch_trailing_dash_body_in_pairs_form_is_error(tcl: Tcl):
 def test_invalid_puts_arity_is_error(tcl: Tcl):
     tcl.command("puts a b")
 
-    result = tcl.run()
+    result = tcl.run(args=["--run"])
 
     assert result.returncode != 0
     assert result.stderr == "syntax error at 1:1: puts expects string or -nonewline string\n"
